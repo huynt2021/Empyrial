@@ -86,6 +86,7 @@ class Engine:
         max_weights=None,
         risk_manager=None,
         data=pd.DataFrame(),
+        data_all=pd.DataFrame(),
     ):
         if benchmark is None:
             benchmark = BENCHMARK
@@ -108,7 +109,8 @@ class Engine:
         self.max_weights = max_weights
         self.min_weights = min_weights
         self.risk_manager = risk_manager
-        self.data = data.loc[self.start_date:self.end_date]
+        self.data = data.filter(self.portfolio).loc[pd.to_datetime(self.start_date).date():pd.to_datetime(self.end_date).date()]
+        self.data_all = data.loc[pd.to_datetime(self.start_date).date():pd.to_datetime(self.end_date).date()]
 
         optimizers = {
             "EF": efficient_frontier,
@@ -137,9 +139,18 @@ class Engine:
                 self.min_weights,
                 self.max_weights,
                 self.expected_returns,
-                self.risk_model
+                self.risk_model,
+                self.data,
+                self.data_all
             )
 
+def calculate_percent_change_from_cagr(cagr, start_date, end_date):
+    # Calculate the number of years between the start and end dates
+    num_years = (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days / 365.25
+
+    # Calculate the percent change using the formula
+    percent_change = ((1 + cagr)**num_years - 1) * 100
+    return percent_change
 
 def get_returns(stocks, wts, start_date, end_date=TODAY):
     if len(stocks) > 1:
@@ -221,25 +232,43 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
 
             # then we want to get the returns
             
-            add_returns = get_returns(
-                my_portfolio.portfolio,
-                weights,
-                start_date=dates[i],
-                end_date=dates[i + 1],
-            )
+            # add_returns = get_returns(
+                # my_portfolio.portfolio,
+                # weights,
+                # start_date=dates[i],
+                # end_date=dates[i + 1],
+            # )
+            add_returns = None
+            if not my_portfolio.data.empty:
+                add_returns = get_returns_from_data(my_portfolio.data, weights, my_portfolio.portfolio)
+            else:
+                add_returns = get_returns(
+                    my_portfolio.portfolio,
+                    weights,
+                    start_date=dates[i],
+                    end_date=dates[i + 1],
+                )
 
             # then append those returns
-            returns = returns.append(add_returns)
+            # returns = returns.append(add_returns)
+            # NOTE: recent versions of pandas >> use concat
+            # returns = pd.concat([returns, add_returns])
+            
+            # Concatenate the Series or DataFrames
+            # Then, drop duplicate indices, keeping the first occurrence
+            combined = pd.concat([returns, add_returns])
+            combined = combined[~combined.index.duplicated(keep='first')]
+            returns = combined
     else:
-      if not my_portfolio.data.empty:
-              returns = get_returns_from_data(my_portfolio.data, my_portfolio.weights, my_portfolio.portfolio)
-      else:
-              returns = get_returns(
-                  my_portfolio.portfolio,
-                  my_portfolio.weights,
-                  start_date=my_portfolio.start_date,
-                  end_date=my_portfolio.end_date,
-              )
+        if not my_portfolio.data.empty:
+            returns = get_returns_from_data(my_portfolio.data, my_portfolio.weights, my_portfolio.portfolio)
+        else:
+            returns = get_returns(
+              my_portfolio.portfolio,
+              my_portfolio.weights,
+              start_date=my_portfolio.start_date,
+              end_date=my_portfolio.end_date,
+            )
 
     creturns = (returns + 1).cumprod()
 
@@ -307,18 +336,95 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
     print("Start date: " + str(my_portfolio.start_date))
     print("End date: " + str(my_portfolio.end_date))
 
-    benchmark = get_returns(
-        my_portfolio.benchmark,
-        wts=[1],
-        start_date=my_portfolio.start_date,
-        end_date=my_portfolio.end_date,
-    )
-    benchmark = benchmark.dropna()
+    #benchmark = get_returns(
+    #    my_portfolio.benchmark,
+    #    wts=[1],
+    #    start_date=my_portfolio.start_date,
+    #    end_date=my_portfolio.end_date,
+    #)
+    #benchmark = benchmark.dropna()
     
+    benchmark = None
+    if not my_portfolio.data.empty:
+        benchmark = get_returns_from_data(
+            data=my_portfolio.data_all,
+            wts=[1],
+            stocks=my_portfolio.benchmark)
+        benchmark = benchmark.dropna()
+    else:
+        benchmark = get_returns(
+            my_portfolio.benchmark,
+            wts=[1],
+            start_date=my_portfolio.start_date,
+            end_date=my_portfolio.end_date,
+        )
+        benchmark = benchmark.dropna()
+    
+    # --- CHECK DUP in returns, benchmark
+    print("--- checking dup. in returns and benchmark")
+    # print(returns.index[returns.index.duplicated()])
+    # in orig. code: returns is a Series; and benchmark is a DataFrame
+    
+    # Set pandas to display all rows and columns
+    # pd.set_option('display.max_rows', None)
+    # pd.set_option('display.max_columns', None)
+    print(f"--- items in returns and benchmark\n")
+    
+    if isinstance(returns, pd.DataFrame):
+        print("returns is a DataFrame")
+    elif isinstance(returns, pd.Series):
+        print("returns is a Series")
+    print(f"---returns:\n{returns}")
+    
+    if isinstance(benchmark, pd.DataFrame):
+        print("benchmark is a DataFrame")
+    elif isinstance(benchmark, pd.Series):
+        print("benchmark is a Series")
+        # Convert Series to DataFrame
+        benchmark = benchmark.to_frame()
+        
+        if isinstance(benchmark, pd.DataFrame):
+            print("benchmark is NOW a DataFrame")
+        elif isinstance(benchmark, pd.Series):
+            print("benchmark is STILL a Series")
+    print(f"---benchmark:\n{benchmark}")
+    # Optionally, reset to default settings after printing
+    # pd.reset_option('display.max_rows')
+    # pd.reset_option('display.max_columns')
+    
+    #print(benchmark.index[benchmark.index.duplicated()])
+    
+    # tz_localize
+    # Ensure the index of the benchmark is a DatetimeIndex
+    if not isinstance(benchmark.index, pd.DatetimeIndex):
+        benchmark.index = pd.to_datetime(benchmark.index)
+    # Ensure returns has a DatetimeIndex
+    if not isinstance(returns.index, pd.DatetimeIndex):
+        returns.index = pd.to_datetime(returns.index)
+        
+    # Ensure that 'returns' has a name
+    if returns.name is None:
+        returns.name = 'Portfolio Ret.'
+    # Ensure that 'benchmark' has a name
+    if isinstance(benchmark, pd.Series):
+        if benchmark.name is None:
+            benchmark.name = 'Benchmark'
+    
+    first_date = returns.index.min().strftime('%Y-%m-%d')
+    last_date = returns.index.max().strftime('%Y-%m-%d')
+    num_years_invested = (returns.index.max() - returns.index.min()).days / 365.25
+    num_years_invested = str(round(num_years_invested, 2))
+    # STATS
     CAGR = cagr(returns, period='daily', annualization=None)
+    CAGR_VAL = CAGR
     # CAGR = round(CAGR, 2)
     # CAGR = CAGR.tolist()
     CAGR = str(round(CAGR * 100, 2)) + "%"
+    
+    # Assuming CAGR is already calculated and is in decimal form (not percentage)
+    portfolio_percent_change = calculate_percent_change_from_cagr(CAGR_VAL, first_date, last_date)
+    portfolio_percent_change_str = str(round(portfolio_percent_change, 2)) + "%"
+    portfolio_percent_change_str = f"{portfolio_percent_change_str} over {num_years_invested} yrs"
 
     CUM = cum_returns(returns, starting_value=0, out=None) * 100
     CUM = CUM.iloc[-1]
@@ -401,6 +507,7 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
     data = {
         "": [
             "Annual return",
+            "Return",
             "Cumulative return",
             "Annual volatility",
             "Winning day ratio",
@@ -420,6 +527,7 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
         ],
         "Backtest": [
             CAGR,
+            portfolio_percent_change_str,
             CUM,
             VOL,
             f"{win_ratio}%",
@@ -443,7 +551,7 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
     df = pd.DataFrame(data)
     df.set_index("", inplace=True)
     df.style.set_properties(
-        **{"background-color": "white", "color": "black", "border-color": "black"}
+        **{"background-color": "white", "color": "black", "border-color": "grey"}
     )
     display(df)
 
@@ -481,6 +589,156 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
     empyrial.VAR = VAR
     empyrial.AL = AL
     empyrial.BTA = BTA
+    
+    # Calculate benchmark metrics
+    # benchmark_CAGR = cagr(benchmark, period='daily', annualization=None)
+    # benchmark_CAGR = str(round(benchmark_CAGR * 100, 2)) + "%"
+
+    # benchmark_CUM = cum_returns(benchmark, starting_value=0, out=None) * 100
+    # benchmark_CUM = benchmark_CUM.iloc[-1]
+    # benchmark_CUM = str(round(benchmark_CUM, 2)) + "%"
+
+    # benchmark_VOL = qs.stats.volatility(benchmark, annualize=True)
+    # benchmark_VOL = str(round(benchmark_VOL * 100, 2)) + " %"
+
+    # benchmark_SR = qs.stats.sharpe(benchmark, rf=rf)
+    # benchmark_SR = str(np.round(benchmark_SR, decimals=2))
+
+    # benchmark_CR = qs.stats.calmar(benchmark)
+    # benchmark_CR = str(round(benchmark_CR, 2))
+
+    # benchmark_STABILITY = stability_of_timeseries(benchmark)
+    # benchmark_STABILITY = str(round(benchmark_STABILITY, 2))
+
+    # benchmark_MD = max_drawdown(benchmark)
+    # benchmark_MD = str(round(benchmark_MD * 100, 2)) + " %"
+
+    # benchmark_SOR = sortino_ratio(benchmark, required_return=0, period='daily')
+    # benchmark_SOR = str(round(benchmark_SOR, 2))
+
+    # benchmark_SK = qs.stats.skew(benchmark)
+    # benchmark_SK = str(round(benchmark_SK, 2))
+
+    # benchmark_KU = qs.stats.kurtosis(benchmark)
+    # benchmark_KU = str(round(benchmark_KU, 2))
+
+    # benchmark_TA = tail_ratio(benchmark)
+    # benchmark_TA = str(round(benchmark_TA, 2))
+
+    # benchmark_CSR = qs.stats.common_sense_ratio(benchmark)
+    # benchmark_CSR = str(round(benchmark_CSR, 2))
+
+    # benchmark_VAR = qs.stats.value_at_risk(benchmark, sigma=sigma_value, confidence=confidence_value)
+    # benchmark_VAR = str(np.round(benchmark_VAR, decimals=2) * 100) + " %"
+    
+    benchmark_df = pd.DataFrame(),
+    if isinstance(benchmark, pd.Series):
+        # Convert Series to DataFrame
+        benchmark_df = benchmark.to_frame()
+    elif isinstance(benchmark, pd.DataFrame):
+        benchmark_df = benchmark
+    
+    # benchmark_df is DataFrame
+    # Assuming benchmark_df has a single column; adjust 'benchmark_column' as needed
+    benchmark_column = benchmark_df.columns[0]  # Change this to the correct column name if necessary
+
+    # Calculate benchmark metrics
+    benchmark_CAGR = cagr(benchmark_df[benchmark_column], period='daily', annualization=None)
+    benchmark_CAGR_VAL = benchmark_CAGR
+    benchmark_CAGR = str(round(benchmark_CAGR * 100, 2)) + "%"
+    
+    benchmark_percent_change = calculate_percent_change_from_cagr(benchmark_CAGR_VAL, first_date, last_date)
+    benchmark_percent_change_str = str(round(benchmark_percent_change, 2)) + "%"
+    benchmark_percent_change_str = f"{benchmark_percent_change_str} over {num_years_invested} yrs"
+
+    benchmark_CUM = cum_returns(benchmark_df[benchmark_column], starting_value=0, out=None) * 100
+    benchmark_CUM = benchmark_CUM.iloc[-1]
+    benchmark_CUM = str(round(benchmark_CUM, 2)) + "%"
+
+    benchmark_VOL = qs.stats.volatility(benchmark_df[benchmark_column], annualize=True)
+    benchmark_VOL = str(round(benchmark_VOL * 100, 2)) + " %"
+
+    benchmark_SR = qs.stats.sharpe(benchmark_df[benchmark_column], rf=rf)
+    benchmark_SR = str(np.round(benchmark_SR, decimals=2))
+
+    benchmark_CR = qs.stats.calmar(benchmark_df[benchmark_column])
+    benchmark_CR = str(round(benchmark_CR, 2))
+
+    benchmark_STABILITY = stability_of_timeseries(benchmark_df[benchmark_column])
+    benchmark_STABILITY = str(round(benchmark_STABILITY, 2))
+
+    benchmark_MD = max_drawdown(benchmark_df[benchmark_column])
+    benchmark_MD = str(round(benchmark_MD * 100, 2)) + " %"
+
+    benchmark_SOR = sortino_ratio(benchmark_df[benchmark_column], required_return=0, period='daily')
+    benchmark_SOR = str(round(benchmark_SOR, 2))
+
+    benchmark_SK = qs.stats.skew(benchmark_df[benchmark_column])
+    benchmark_SK = str(round(benchmark_SK, 2))
+
+    benchmark_KU = qs.stats.kurtosis(benchmark_df[benchmark_column])
+    benchmark_KU = str(round(benchmark_KU, 2))
+
+    benchmark_TA = tail_ratio(benchmark_df[benchmark_column])
+    benchmark_TA = str(round(benchmark_TA, 2))
+
+    benchmark_CSR = qs.stats.common_sense_ratio(benchmark_df[benchmark_column])
+    benchmark_CSR = str(round(benchmark_CSR, 2))
+
+    benchmark_VAR = qs.stats.value_at_risk(benchmark_df[benchmark_column], sigma=sigma_value, confidence=confidence_value)
+    benchmark_VAR = str(np.round(benchmark_VAR, decimals=2) * 100) + " %"
+    
+    stats_benchmark = {
+        "": [
+            "Annual return",
+            "Return",
+            "Cumulative return",
+            "Annual volatility",
+            "Winning day ratio",
+            "Sharpe ratio",
+            "Calmar ratio",
+            "Information ratio",
+            "Stability",
+            "Max Drawdown",
+            "Sortino ratio",
+            "Skew",
+            "Kurtosis",
+            "Tail Ratio",
+            "Common sense ratio",
+            "Daily value at risk",
+            "Alpha",
+            "Beta",
+        ],
+        "Benchmark": [
+            benchmark_CAGR,
+            benchmark_percent_change_str,
+            benchmark_CUM,
+            benchmark_VOL,
+            "N/A",
+            benchmark_SR,
+            benchmark_CR,
+            "N/A",
+            benchmark_STABILITY,
+            benchmark_MD,
+            benchmark_SOR,
+            benchmark_SK,
+            benchmark_KU,
+            benchmark_TA,
+            benchmark_CSR,
+            benchmark_VAR,
+            "--",
+            "--",
+        ],
+    }
+
+    # Create DataFrame
+    df_benchmark = pd.DataFrame(stats_benchmark)
+    df_benchmark.set_index("", inplace=True)
+    df_benchmark.style.set_properties(
+        **{"background-color": "white", "color": "black", "border-color": "grey"}
+    )
+    display(df_benchmark)
+    # END: Calculate benchmark metrics
 
     try:
         empyrial.orderbook = make_rebalance.output
@@ -515,19 +773,19 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
       graph_opt(my_portfolio.portfolio, wts, pie_size=7, font_size=14)
 
     else:
-      qs.plots.returns(returns, benchmark, cumulative=True, savefig="retbench.png")
-      qs.plots.yearly_returns(returns, benchmark, savefig="y_returns.png"),
-      qs.plots.monthly_heatmap(returns, benchmark, savefig="heatmap.png")
-      qs.plots.drawdown(returns, savefig="drawdown.png")
-      qs.plots.drawdowns_periods(returns, savefig="d_periods.png")
-      qs.plots.rolling_volatility(returns, savefig="rvol.png")
-      qs.plots.rolling_sharpe(returns, savefig="rsharpe.png")
-      qs.plots.rolling_beta(returns, benchmark, savefig="rbeta.png")
-      graph_opt(my_portfolio.portfolio, wts, pie_size=7, font_size=14, save=True)
-      pdf = FPDF()
-      pdf.add_page()
-      pdf.set_font("arial", "B", 14)
-      pdf.image(
+        qs.plots.returns(returns, benchmark, cumulative=True, savefig="retbench.png")
+        qs.plots.yearly_returns(returns, benchmark, savefig="y_returns.png"),
+        qs.plots.monthly_heatmap(returns, benchmark, savefig="heatmap.png")
+        qs.plots.drawdown(returns, savefig="drawdown.png")
+        qs.plots.drawdowns_periods(returns, savefig="d_periods.png")
+        qs.plots.rolling_volatility(returns, savefig="rvol.png")
+        qs.plots.rolling_sharpe(returns, savefig="rsharpe.png")
+        qs.plots.rolling_beta(returns, benchmark, savefig="rbeta.png")
+        graph_opt(my_portfolio.portfolio, wts, pie_size=7, font_size=14, save=True)
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("arial", "B", 14)
+        pdf.image(
           "https://user-images.githubusercontent.com/61618641/120909011-98f8a180-c670-11eb-8844-2d423ba3fa9c.png",
           x=None,
           y=None,
@@ -535,53 +793,155 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
           h=5,
           type="",
           link="https://github.com/ssantoshp/Empyrial",
-      )
-      pdf.cell(20, 15, f"Report", ln=1)
-      pdf.set_font("arial", size=11)
-      pdf.image("allocation.png", x=135, y=0, w=70, h=70, type="", link="")
-      pdf.cell(20, 7, f"Start date: " + str(my_portfolio.start_date), ln=1)
-      pdf.cell(20, 7, f"End date: " + str(my_portfolio.end_date), ln=1)
-      ret.savefig("ret.png")
+        )
+        pdf.cell(20, 15, f"Report", ln=1)
+        pdf.set_font("arial", size=11)
+        pdf.image("allocation.png", x=135, y=0, w=70, h=70, type="", link="")
+        pdf.cell(20, 7, f"Start date: " + str(first_date), ln=1)
+        pdf.cell(20, 7, f"End date: " + str(last_date), ln=1)
+        ret.savefig("ret.png")
 
-      pdf.cell(20, 7, f"", ln=1)
-      pdf.cell(20, 7, f"Annual return: " + str(CAGR), ln=1)
-      pdf.cell(20, 7, f"Cumulative return: " + str(CUM), ln=1)
-      pdf.cell(20, 7, f"Annual volatility: " + str(VOL), ln=1)
-      pdf.cell(20, 7, f"Winning day ratio: " + str(win_ratio), ln=1)
-      pdf.cell(20, 7, f"Sharpe ratio: " + str(SR), ln=1)
-      pdf.cell(20, 7, f"Calmar ratio: " + str(CR), ln=1)
-      pdf.cell(20, 7, f"Information ratio: " + str(IR), ln=1)
-      pdf.cell(20, 7, f"Stability: " + str(STABILITY), ln=1)
-      pdf.cell(20, 7, f"Max drawdown: " + str(MD), ln=1)
-      pdf.cell(20, 7, f"Sortino ratio: " + str(SOR), ln=1)
-      pdf.cell(20, 7, f"Skew: " + str(SK), ln=1)
-      pdf.cell(20, 7, f"Kurtosis: " + str(KU), ln=1)
-      pdf.cell(20, 7, f"Tail ratio: " + str(TA), ln=1)
-      pdf.cell(20, 7, f"Common sense ratio: " + str(CSR), ln=1)
-      pdf.cell(20, 7, f"Daily value at risk: " + str(VAR), ln=1)
-      pdf.cell(20, 7, f"Alpha: " + str(AL), ln=1)
-      pdf.cell(20, 7, f"Beta: " + str(BTA), ln=1)
+        # pdf.cell(20, 7, f"", ln=1)
+        # pdf.cell(20, 7, f"Annual return: " + str(CAGR), ln=1)
+        # pdf.cell(20, 7, f"Cumulative return: " + str(CUM), ln=1)
+        # pdf.cell(20, 7, f"Annual volatility: " + str(VOL), ln=1)
+        # pdf.cell(20, 7, f"Winning day ratio: " + str(win_ratio), ln=1)
+        # pdf.cell(20, 7, f"Sharpe ratio: " + str(SR), ln=1)
+        # pdf.cell(20, 7, f"Calmar ratio: " + str(CR), ln=1)
+        # pdf.cell(20, 7, f"Information ratio: " + str(IR), ln=1)
+        # pdf.cell(20, 7, f"Stability: " + str(STABILITY), ln=1)
+        # pdf.cell(20, 7, f"Max drawdown: " + str(MD), ln=1)
+        # pdf.cell(20, 7, f"Sortino ratio: " + str(SOR), ln=1)
+        # pdf.cell(20, 7, f"Skew: " + str(SK), ln=1)
+        # pdf.cell(20, 7, f"Kurtosis: " + str(KU), ln=1)
+        # pdf.cell(20, 7, f"Tail ratio: " + str(TA), ln=1)
+        # pdf.cell(20, 7, f"Common sense ratio: " + str(CSR), ln=1)
+        # pdf.cell(20, 7, f"Daily value at risk: " + str(VAR), ln=1)
+        # pdf.cell(20, 7, f"Alpha: " + str(AL), ln=1)
+        # pdf.cell(20, 7, f"Beta: " + str(BTA), ln=1)
 
-      pdf.image("ret.png", x=-20, y=None, w=250, h=80, type="", link="")
-      pdf.cell(20, 7, f"", ln=1)
-      pdf.image("y_returns.png", x=-20, y=None, w=200, h=100, type="", link="")
-      pdf.cell(20, 7, f"", ln=1)
-      pdf.image("retbench.png", x=None, y=None, w=200, h=100, type="", link="")
-      pdf.cell(20, 7, f"", ln=1)
-      pdf.image("heatmap.png", x=None, y=None, w=200, h=80, type="", link="")
-      pdf.cell(20, 7, f"", ln=1)
-      pdf.image("drawdown.png", x=None, y=None, w=200, h=80, type="", link="")
-      pdf.cell(20, 7, f"", ln=1)
-      pdf.image("d_periods.png", x=None, y=None, w=200, h=80, type="", link="")
-      pdf.cell(20, 7, f"", ln=1)
-      pdf.image("rvol.png", x=None, y=None, w=190, h=80, type="", link="")
-      pdf.cell(20, 7, f"", ln=1)
-      pdf.image("rsharpe.png", x=None, y=None, w=190, h=80, type="", link="")
-      pdf.cell(20, 7, f"", ln=1)
-      pdf.image("rbeta.png", x=None, y=None, w=190, h=80, type="", link="")
+        # Printing to PDF side by side
+        pdf.cell(20, 7, f"", ln=1)
+        pdf.set_font("arial", "B", 11)
+        pdf.cell(60, 7, "Metric", ln=0)
+        pdf.cell(60, 7, "Portfolio", ln=0)
+        pdf.cell(60, 7, "Benchmark", ln=1)
+        pdf.set_font("arial", size=11)
+        pdf.cell(60, 7, f"Annual return", ln=0)
+        pdf.cell(60, 7, f"{CAGR}", ln=0)
+        pdf.cell(60, 7, f"{benchmark_CAGR}", ln=1)
+        
+        pdf.cell(60, 7, f"Return", ln=0)
+        pdf.cell(60, 7, f"{portfolio_percent_change_str}", ln=0)
+        pdf.cell(60, 7, f"{benchmark_percent_change_str}", ln=1)
 
-      pdf.output(dest="F", name=filename)
-      print("The PDF was generated successfully!")
+        pdf.cell(60, 7, f"Cumulative return", ln=0)
+        pdf.cell(60, 7, f"{CUM}", ln=0)
+        pdf.cell(60, 7, f"{benchmark_CUM}", ln=1)
+
+        pdf.cell(60, 7, f"Annual volatility", ln=0)
+        pdf.cell(60, 7, f"{VOL}", ln=0)
+        pdf.cell(60, 7, f"{benchmark_VOL}", ln=1)
+
+        pdf.cell(60, 7, f"Winning day ratio", ln=0)
+        pdf.cell(60, 7, f"{win_ratio}%", ln=0)
+        pdf.cell(60, 7, f"-", ln=1)  # Assuming no winning day ratio calculation for benchmark
+
+        pdf.cell(60, 7, f"Sharpe ratio", ln=0)
+        pdf.cell(60, 7, f"{SR}", ln=0)
+        pdf.cell(60, 7, f"{benchmark_SR}", ln=1)
+
+        pdf.cell(60, 7, f"Calmar ratio", ln=0)
+        pdf.cell(60, 7, f"{CR}", ln=0)
+        pdf.cell(60, 7, f"{benchmark_CR}", ln=1)
+
+        pdf.cell(60, 7, f"Information ratio", ln=0)
+        pdf.cell(60, 7, f"{IR}", ln=0)
+        pdf.cell(60, 7, f"-", ln=1)  # Information ratio typically not calculated for the benchmark
+
+        pdf.cell(60, 7, f"Stability", ln=0)
+        pdf.cell(60, 7, f"{STABILITY}", ln=0)
+        pdf.cell(60, 7, f"{benchmark_STABILITY}", ln=1)
+
+        pdf.cell(60, 7, f"Max drawdown", ln=0)
+        pdf.cell(60, 7, f"{MD}", ln=0)
+        pdf.cell(60, 7, f"{benchmark_MD}", ln=1)
+
+        pdf.cell(60, 7, f"Sortino ratio", ln=0)
+        pdf.cell(60, 7, f"{SOR}", ln=0)
+        pdf.cell(60, 7, f"{benchmark_SOR}", ln=1)
+
+        pdf.cell(60, 7, f"Skew", ln=0)
+        pdf.cell(60, 7, f"{SK}", ln=0)
+        pdf.cell(60, 7, f"{benchmark_SK}", ln=1)
+
+        pdf.cell(60, 7, f"Kurtosis", ln=0)
+        pdf.cell(60, 7, f"{KU}", ln=0)
+        pdf.cell(60, 7, f"{benchmark_KU}", ln=1)
+
+        pdf.cell(60, 7, f"Tail ratio", ln=0)
+        pdf.cell(60, 7, f"{TA}", ln=0)
+        pdf.cell(60, 7, f"{benchmark_TA}", ln=1)
+
+        pdf.cell(60, 7, f"Common sense ratio", ln=0)
+        pdf.cell(60, 7, f"{CSR}", ln=0)
+        pdf.cell(60, 7, f"{benchmark_CSR}", ln=1)
+
+        pdf.cell(60, 7, f"Daily value at risk", ln=0)
+        pdf.cell(60, 7, f"{VAR}", ln=0)
+        pdf.cell(60, 7, f"{benchmark_VAR}", ln=1)
+
+        pdf.cell(60, 7, f"Alpha", ln=0)
+        pdf.cell(60, 7, f"{AL}", ln=1)  # Alpha and Beta calculated for portfolio only
+        pdf.cell(60, 7, f"Beta", ln=0)
+        pdf.cell(60, 7, f"{BTA}", ln=1)
+        
+        # Create absolute value comparision plot
+        # Ensure the initial values are set for both portfolio and benchmark
+        initial_portfolio_value = 1000000
+        initial_benchmark_value = 1000000
+        # Calculate cumulative values
+        portfolio_values = (returns + 1).cumprod() * initial_portfolio_value
+        benchmark_values = (benchmark + 1).cumprod() * initial_benchmark_value
+        # Plotting
+        plt.figure(figsize=(12, 6))
+        plt.plot(portfolio_values.index, portfolio_values, label="Portfolio", color='blue')
+        plt.plot(benchmark_values.index, benchmark_values, label="Benchmark", color='orange')
+        # Adding titles and labels
+        plt.title("Portfolio vs Benchmark - Abs. Value Over Time")
+        plt.xlabel("Date")
+        plt.ylabel("Value")
+        plt.legend()
+        # Save plot as image
+        plot_filename = "portfolio_vs_benchmark.png"
+        plt.savefig(plot_filename)
+        plt.close()
+        # Add the plot image to the PDF
+        pdf.add_page()
+        pdf.image(plot_filename, x=None, y=None, w=200)
+        pdf.cell(20, 7, f"", ln=1)
+        
+        # Other plots
+        pdf.image("ret.png", x=-20, y=None, w=250, h=80, type="", link="")
+        pdf.cell(20, 7, f"", ln=1)
+        pdf.image("y_returns.png", x=-20, y=None, w=200, h=100, type="", link="")
+        pdf.cell(20, 7, f"", ln=1)
+        pdf.image("retbench.png", x=None, y=None, w=200, h=100, type="", link="")
+        pdf.cell(20, 7, f"", ln=1)
+        pdf.image("heatmap.png", x=None, y=None, w=200, h=80, type="", link="")
+        pdf.cell(20, 7, f"", ln=1)
+        pdf.image("drawdown.png", x=None, y=None, w=200, h=80, type="", link="")
+        pdf.cell(20, 7, f"", ln=1)
+        pdf.image("d_periods.png", x=None, y=None, w=200, h=80, type="", link="")
+        pdf.cell(20, 7, f"", ln=1)
+        pdf.image("rvol.png", x=None, y=None, w=190, h=80, type="", link="")
+        pdf.cell(20, 7, f"", ln=1)
+        pdf.image("rsharpe.png", x=None, y=None, w=190, h=80, type="", link="")
+        pdf.cell(20, 7, f"", ln=1)
+        pdf.image("rbeta.png", x=None, y=None, w=190, h=80, type="", link="")
+
+        pdf.output(dest="F", name=filename)
+        print("The PDF was generated successfully!")
 
 
 def flatten(subject) -> list:
@@ -610,8 +970,10 @@ def equal_weighting(my_portfolio) -> list:
 
 def efficient_frontier(my_portfolio, perf=True) -> list:
     if not my_portfolio.data.empty:
+        # print("---data NOT EMPTY >> using custom data")
         df = my_portfolio.data
     else:
+        # print("---data is EMPTY >> yfinance?")
         ohlc = yf.download(
             my_portfolio.portfolio,
             start=my_portfolio.start_date,
@@ -620,16 +982,6 @@ def efficient_frontier(my_portfolio, perf=True) -> list:
         )
         prices = ohlc["Adj Close"].dropna(how="all")
         df = prices.filter(my_portfolio.portfolio)
-
-    # changed to take in desired timeline, the problem is that it would use all historical data
-    ohlc = yf.download(
-        my_portfolio.portfolio,
-        start=my_portfolio.start_date,
-        end=my_portfolio.end_date,
-        progress=False,
-    )
-    prices = ohlc["Adj Close"].dropna(how="all")
-    df = prices.filter(my_portfolio.portfolio)
 
     # sometimes we will pick a date range where company isn't public we can't set price to 0 so it has to go to 1
     df = df.fillna(1)
@@ -788,12 +1140,28 @@ def min_var(my_portfolio, perf=True) -> list:
 def optimize_portfolio(my_portfolio, vol_max=25, pie_size=5, font_size=14):
     if my_portfolio.optimizer == None:
         raise Exception("You didn't define any optimizer in your portfolio!")
-    returns1 = get_returns(
-        my_portfolio.portfolio,
-        equal_weighting(my_portfolio),
-        start_date=my_portfolio.start_date,
-        end_date=my_portfolio.end_date,
-    )
+    
+    # returns1 = get_returns(
+        # my_portfolio.portfolio,
+        # equal_weighting(my_portfolio),
+        # start_date=my_portfolio.start_date,
+        # end_date=my_portfolio.end_date,
+    # )
+    
+    returns1 = None
+    if not my_portfolio.data.empty:
+        returns1 = get_returns_from_data(
+            my_portfolio.data, 
+            equal_weighting(my_portfolio), 
+            my_portfolio.portfolio)
+    else:
+        returns1 = get_returns(
+            my_portfolio.portfolio,
+            equal_weighting(my_portfolio),
+            start_date=my_portfolio.start_date,
+            end_date=my_portfolio.end_date,
+        )
+    
     creturns1 = (returns1 + 1).cumprod()
 
     port = copy.deepcopy(my_portfolio.portfolio)
@@ -830,9 +1198,24 @@ def optimize_portfolio(my_portfolio, vol_max=25, pie_size=5, font_size=14):
 
     print("\n")
 
-    returns2 = get_returns(
-        port, wts, start_date=my_portfolio.start_date, end_date=my_portfolio.end_date
-    )
+    # returns2 = get_returns(
+        # port, wts, start_date=my_portfolio.start_date, end_date=my_portfolio.end_date
+    # )
+    
+    returns2 = None
+    if not my_portfolio.data.empty:
+        returns2 = get_returns_from_data(
+            my_portfolio.data, 
+            wts, 
+            port)
+    else:
+        returns2 = get_returns(
+            port,
+            wts,
+            start_date=my_portfolio.start_date, 
+            end_date=my_portfolio.end_date
+        )
+    
     creturns2 = (returns2 + 1).cumprod()
 
     plt.rcParams["font.size"] = 13
@@ -912,6 +1295,8 @@ def make_rebalance(
     max,
     expected_returns,
     risk_model,
+    df,
+    data_all
 ) -> pd.DataFrame:
     sdate = str(start_date)[:10]
     if rebalance[0] != sdate:
@@ -956,7 +1341,8 @@ def make_rebalance(
                 max_weights=max,
                 expected_returns=expected_returns,
                 risk_model=risk_model,
-                data=my_portfolio.data  # Ensure custom data is passed here
+                data=df, # Ensure custom data is passed here
+                data_all=data_all
             )
 
         except TypeError:
@@ -972,9 +1358,21 @@ def make_rebalance(
                 max_weights=max,
                 expected_returns=expected_returns,
                 risk_model=risk_model,
+                data=df, # Ensure custom data is passed here
+                data_all=data_all
             )
-
+        
+        # Orig. code
         output_df["{}".format(dates[i + 1])] = portfolio.weights
+        
+        # Debug purpose
+        # print(df)
+        # print(portfolio.weights)
+        
+        # # Mod: might not work: ddjust weights to match the index of output_df
+        # cleaned_weights = pd.Series(portfolio.weights, index=portfolio_input)
+        # cleaned_weights = cleaned_weights.reindex(output_df.index).fillna(0)
+        # output_df["{}".format(dates[i + 1])] = cleaned_weights
 
     # we have to run it one more time to get what the optimization is for up to today's date
     try:
@@ -989,7 +1387,8 @@ def make_rebalance(
             max_weights=max,
             expected_returns=expected_returns,
             risk_model=risk_model,
-            data=my_portfolio.data  # Ensure custom data is passed here
+            data=df, # Ensure custom data is passed here
+            data_all=data_all
         )
 
     except TypeError:
@@ -1004,8 +1403,11 @@ def make_rebalance(
             max_weights=max,
             expected_returns=expected_returns,
             risk_model=risk_model,
+            data=df, # Ensure custom data is passed here
+            data_all=data_all
         )
-
+    
+    # Orig. code
     output_df["{}".format(TODAY)] = portfolio.weights
 
     make_rebalance.output = output_df
