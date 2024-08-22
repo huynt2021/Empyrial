@@ -108,7 +108,7 @@ class Engine:
         self.max_weights = max_weights
         self.min_weights = min_weights
         self.risk_manager = risk_manager
-        self.data = data
+        self.data = data.loc[self.start_date:self.end_date]
 
         optimizers = {
             "EF": efficient_frontier,
@@ -609,6 +609,18 @@ def equal_weighting(my_portfolio) -> list:
     return [1.0 / len(my_portfolio.portfolio)] * len(my_portfolio.portfolio)
 
 def efficient_frontier(my_portfolio, perf=True) -> list:
+    if not my_portfolio.data.empty:
+        df = my_portfolio.data
+    else:
+        ohlc = yf.download(
+            my_portfolio.portfolio,
+            start=my_portfolio.start_date,
+            end=my_portfolio.end_date,
+            progress=False,
+        )
+        prices = ohlc["Adj Close"].dropna(how="all")
+        df = prices.filter(my_portfolio.portfolio)
+
     # changed to take in desired timeline, the problem is that it would use all historical data
     ohlc = yf.download(
         my_portfolio.portfolio,
@@ -651,16 +663,17 @@ def efficient_frontier(my_portfolio, perf=True) -> list:
 
 
 def hrp(my_portfolio, perf=True) -> list:
-    # changed to take in desired timeline, the problem is that it would use all historical data
-
-    ohlc = yf.download(
-        my_portfolio.portfolio,
-        start=my_portfolio.start_date,
-        end=my_portfolio.end_date,
-        progress=False,
-    )
-    prices = ohlc["Adj Close"].dropna(how="all")
-    prices = prices.filter(my_portfolio.portfolio)
+    if not my_portfolio.data.empty:
+        prices = my_portfolio.data
+    else:
+        ohlc = yf.download(
+            my_portfolio.portfolio,
+            start=my_portfolio.start_date,
+            end=my_portfolio.end_date,
+            progress=False,
+        )
+        prices = ohlc["Adj Close"].dropna(how="all")
+        prices = prices.filter(my_portfolio.portfolio)
 
     # sometimes we will pick a date range where company isn't public we can't set price to 0 so it has to go to 1
     prices = prices.fillna(1)
@@ -684,16 +697,17 @@ def hrp(my_portfolio, perf=True) -> list:
 
 
 def mean_var(my_portfolio, vol_max=0.15, perf=True) -> list:
-    # changed to take in desired timeline, the problem is that it would use all historical data
-
-    ohlc = yf.download(
-        my_portfolio.portfolio,
-        start=my_portfolio.start_date,
-        end=my_portfolio.end_date,
-        progress=False,
-    )
-    prices = ohlc["Adj Close"].dropna(how="all")
-    prices = prices.filter(my_portfolio.portfolio)
+    if not my_portfolio.data.empty:
+        prices = my_portfolio.data
+    else:
+        ohlc = yf.download(
+            my_portfolio.portfolio,
+            start=my_portfolio.start_date,
+            end=my_portfolio.end_date,
+            progress=False,
+        )
+        prices = ohlc["Adj Close"].dropna(how="all")
+        prices = prices.filter(my_portfolio.portfolio)
 
     # sometimes we will pick a date range where company isn't public we can't set price to 0 so it has to go to 1
     prices = prices.fillna(1)
@@ -729,14 +743,17 @@ def mean_var(my_portfolio, vol_max=0.15, perf=True) -> list:
 
 
 def min_var(my_portfolio, perf=True) -> list:
-    ohlc = yf.download(
-        my_portfolio.portfolio,
-        start=my_portfolio.start_date,
-        end=my_portfolio.end_date,
-        progress=False,
-    )
-    prices = ohlc["Adj Close"].dropna(how="all")
-    prices = prices.filter(my_portfolio.portfolio)
+    if not my_portfolio.data.empty:
+        prices = my_portfolio.data
+    else:
+        ohlc = yf.download(
+            my_portfolio.portfolio,
+            start=my_portfolio.start_date,
+            end=my_portfolio.end_date,
+            progress=False,
+        )
+        prices = ohlc["Adj Close"].dropna(how="all")
+        prices = prices.filter(my_portfolio.portfolio)
 
     if my_portfolio.expected_returns == None:
         my_portfolio.expected_returns = 'capm_return'
@@ -939,6 +956,7 @@ def make_rebalance(
                 max_weights=max,
                 expected_returns=expected_returns,
                 risk_model=risk_model,
+                data=my_portfolio.data  # Ensure custom data is passed here
             )
 
         except TypeError:
@@ -971,6 +989,7 @@ def make_rebalance(
             max_weights=max,
             expected_returns=expected_returns,
             risk_model=risk_model,
+            data=my_portfolio.data  # Ensure custom data is passed here
         )
 
     except TypeError:
