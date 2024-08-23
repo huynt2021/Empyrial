@@ -109,8 +109,19 @@ class Engine:
         self.max_weights = max_weights
         self.min_weights = min_weights
         self.risk_manager = risk_manager
-        self.data = data.filter(self.portfolio).loc[pd.to_datetime(self.start_date).date():pd.to_datetime(self.end_date).date()]
+        
+        # Backup data to data_all
         self.data_all = data.loc[pd.to_datetime(self.start_date).date():pd.to_datetime(self.end_date).date()]
+        
+        # Filter the data to the portfolio and the date range
+        # Start portfolio from the first date when all assets not N/A, NaN
+        self.data = data.filter(self.portfolio).loc[pd.to_datetime(self.start_date).date():pd.to_datetime(self.end_date).date()]
+        # Find the first date with no missing data
+        first_valid_date = self.data.dropna().index.min()
+        # print(f"The first date where all stocks have data is: {first_valid_date.strftime('%Y-%m-%d')}")
+        # Update self.start_date with this date in "YYYY-MM-DD" format
+        self.start_date = first_valid_date.strftime('%Y-%m-%d')
+        
 
         optimizers = {
             "EF": efficient_frontier,
@@ -153,20 +164,22 @@ def calculate_percent_change_from_cagr(cagr, start_date, end_date):
     return percent_change
 
 def get_returns(stocks, wts, start_date, end_date=TODAY):
-    if len(stocks) > 1:
-        assets = yf.download(stocks, start=start_date, end=end_date, progress=False)["Adj Close"]
-        assets = assets.filter(stocks)
-        initial_alloc = wts/assets.iloc[0]
-        if initial_alloc.isna().any():
-            raise ValueError("Some stock is not available at initial state!")
-        portfolio_value = (assets * initial_alloc).sum(axis=1)
-        returns = portfolio_value.pct_change()[1:]
-        return returns
-    else:
-        df = yf.download(stocks, start=start_date, end=end_date, progress=False)["Adj Close"]
-        df = pd.DataFrame(df)
-        returns = df.pct_change()[1:]
-        return returns
+    pass
+    
+    # if len(stocks) > 1:
+        # assets = yf.download(stocks, start=start_date, end=end_date, progress=False)["Adj Close"]
+        # assets = assets.filter(stocks)
+        # initial_alloc = wts/assets.iloc[0]
+        # if initial_alloc.isna().any():
+            # raise ValueError("Some stock is not available at initial state!")
+        # portfolio_value = (assets * initial_alloc).sum(axis=1)
+        # returns = portfolio_value.pct_change()[1:]
+        # return returns
+    # else:
+        # df = yf.download(stocks, start=start_date, end=end_date, progress=False)["Adj Close"]
+        # df = pd.DataFrame(df)
+        # returns = df.pct_change()[1:]
+        # return returns
 
 
 def get_returns_from_data(data, wts, stocks):
@@ -361,14 +374,14 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
         benchmark = benchmark.dropna()
     
     # --- CHECK DUP in returns, benchmark
-    print("--- checking dup. in returns and benchmark")
+    # print("--- checking dup. in returns and benchmark")
     # print(returns.index[returns.index.duplicated()])
     # in orig. code: returns is a Series; and benchmark is a DataFrame
     
     # Set pandas to display all rows and columns
     # pd.set_option('display.max_rows', None)
     # pd.set_option('display.max_columns', None)
-    print(f"--- items in returns and benchmark\n")
+    # print(f"--- items in returns and benchmark\n")
     
     if isinstance(returns, pd.DataFrame):
         print("returns is a DataFrame")
@@ -970,18 +983,20 @@ def equal_weighting(my_portfolio) -> list:
 
 def efficient_frontier(my_portfolio, perf=True) -> list:
     if not my_portfolio.data.empty:
-        # print("---data NOT EMPTY >> using custom data")
+        print("---data NOT EMPTY >> using custom data")
         df = my_portfolio.data
     else:
-        # print("---data is EMPTY >> yfinance?")
-        ohlc = yf.download(
-            my_portfolio.portfolio,
-            start=my_portfolio.start_date,
-            end=my_portfolio.end_date,
-            progress=False,
-        )
-        prices = ohlc["Adj Close"].dropna(how="all")
-        df = prices.filter(my_portfolio.portfolio)
+        print("---data is EMPTY >> yfinance?")
+        pass
+    
+        # ohlc = yf.download(
+            # my_portfolio.portfolio,
+            # start=my_portfolio.start_date,
+            # end=my_portfolio.end_date,
+            # progress=False,
+        # )
+        # prices = ohlc["Adj Close"].dropna(how="all")
+        # df = prices.filter(my_portfolio.portfolio)
 
     # sometimes we will pick a date range where company isn't public we can't set price to 0 so it has to go to 1
     df = df.fillna(1)
@@ -1018,14 +1033,16 @@ def hrp(my_portfolio, perf=True) -> list:
     if not my_portfolio.data.empty:
         prices = my_portfolio.data
     else:
-        ohlc = yf.download(
-            my_portfolio.portfolio,
-            start=my_portfolio.start_date,
-            end=my_portfolio.end_date,
-            progress=False,
-        )
-        prices = ohlc["Adj Close"].dropna(how="all")
-        prices = prices.filter(my_portfolio.portfolio)
+        pass
+        
+        # ohlc = yf.download(
+            # my_portfolio.portfolio,
+            # start=my_portfolio.start_date,
+            # end=my_portfolio.end_date,
+            # progress=False,
+        # )
+        # prices = ohlc["Adj Close"].dropna(how="all")
+        # prices = prices.filter(my_portfolio.portfolio)
 
     # sometimes we will pick a date range where company isn't public we can't set price to 0 so it has to go to 1
     prices = prices.fillna(1)
@@ -1052,14 +1069,16 @@ def mean_var(my_portfolio, vol_max=0.15, perf=True) -> list:
     if not my_portfolio.data.empty:
         prices = my_portfolio.data
     else:
-        ohlc = yf.download(
-            my_portfolio.portfolio,
-            start=my_portfolio.start_date,
-            end=my_portfolio.end_date,
-            progress=False,
-        )
-        prices = ohlc["Adj Close"].dropna(how="all")
-        prices = prices.filter(my_portfolio.portfolio)
+        pass
+        
+        # ohlc = yf.download(
+            # my_portfolio.portfolio,
+            # start=my_portfolio.start_date,
+            # end=my_portfolio.end_date,
+            # progress=False,
+        # )
+        # prices = ohlc["Adj Close"].dropna(how="all")
+        # prices = prices.filter(my_portfolio.portfolio)
 
     # sometimes we will pick a date range where company isn't public we can't set price to 0 so it has to go to 1
     prices = prices.fillna(1)
@@ -1068,18 +1087,37 @@ def mean_var(my_portfolio, vol_max=0.15, perf=True) -> list:
         my_portfolio.expected_returns = 'capm_return'
     if my_portfolio.risk_model == None:
         my_portfolio.risk_model = 'ledoit_wolf'
-
+    
+    # Calculate expected returns and risk matrix
     mu = expected_returns.return_model(prices, method=my_portfolio.expected_returns)
     S = risk_models.risk_matrix(prices, method=my_portfolio.risk_model)
 
     ef = EfficientFrontier(mu, S)
     ef.add_objective(objective_functions.L2_reg, gamma=my_portfolio.diversification)
+    
+    # Add constraints for min and max weights if provided
     if my_portfolio.min_weights is not None:
         ef.add_constraint(lambda x: x >= my_portfolio.min_weights)
     if my_portfolio.max_weights is not None:
         ef.add_constraint(lambda x: x <= my_portfolio.max_weights)
-    ef.efficient_risk(vol_max)
-    weights = ef.clean_weights()
+    
+    # ef.efficient_risk(vol_max)
+    # weights = ef.clean_weights()
+    
+    weights = None
+    try:
+        # Attempt to optimize for the given maximum volatility
+        ef.efficient_risk(vol_max)
+        weights = ef.clean_weights()
+    except ValueError as e:
+        # If the error is about the minimum volatility being higher, use the minimum volatility
+        if "higher target_volatility" in str(e):
+            min_volatility = float(str(e).split(" ")[4].strip("."))
+            print(f"Target volatility is too low, using minimum achievable volatility: {min_volatility}")
+            ef.efficient_risk(min_volatility)
+            weights = ef.clean_weights()
+        else:
+            raise e  # Re-raise any other errors
 
     wts = weights.items()
 
@@ -1098,14 +1136,16 @@ def min_var(my_portfolio, perf=True) -> list:
     if not my_portfolio.data.empty:
         prices = my_portfolio.data
     else:
-        ohlc = yf.download(
-            my_portfolio.portfolio,
-            start=my_portfolio.start_date,
-            end=my_portfolio.end_date,
-            progress=False,
-        )
-        prices = ohlc["Adj Close"].dropna(how="all")
-        prices = prices.filter(my_portfolio.portfolio)
+        pass
+        
+        # ohlc = yf.download(
+            # my_portfolio.portfolio,
+            # start=my_portfolio.start_date,
+            # end=my_portfolio.end_date,
+            # progress=False,
+        # )
+        # prices = ohlc["Adj Close"].dropna(how="all")
+        # prices = prices.filter(my_portfolio.portfolio)
 
     if my_portfolio.expected_returns == None:
         my_portfolio.expected_returns = 'capm_return'
