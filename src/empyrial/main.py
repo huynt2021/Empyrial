@@ -341,8 +341,9 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
     benchmark_prices = my_portfolio.data_all[my_portfolio.benchmark[0]]
     
     ### CALC metrics using PyPortfolioOpt
-    cov_matrix = risk_models.sample_cov(my_portfolio.data) # covariance matrix
-    corr_matrix = my_portfolio.data.corr() # corr matrix
+    data_no_cash = my_portfolio.data.drop(columns=["Cash"])
+    cov_matrix = risk_models.sample_cov(data_no_cash) # covariance matrix
+    corr_matrix = data_no_cash.corr() # corr matrix
 
     ### Risk manager
     try:
