@@ -4,11 +4,16 @@ import datetime as dt
 import quantstats as qs
 from IPython.display import display
 import matplotlib.pyplot as plt
+import matplotlib
 import copy
 import yfinance as yf
 from fpdf import FPDF
 import warnings
 import logging
+
+# Optional: switch to 'Agg' backend for non-interactive plots
+matplotlib.use('Agg')
+
 from empyrical import (
     cagr,
     cum_returns,
@@ -24,6 +29,7 @@ from pypfopt import (
     expected_returns,
     HRPOpt,
     objective_functions,
+    plotting,
     # black_litterman,
     # BlackLittermanModel,
 )
@@ -209,10 +215,29 @@ def graph_allocation(my_portfolio):
     )
     ax1.axis("equal")  # Equal aspect ratio ensures that pie is drawn as a circle.
     plt.title("Portfolio's allocation")
-    plt.show()
+    # plt.show()
+    
+    
+
+def graph_assets_price_history(data, save=False):
+    # Individual asset price
+    plt.figure(figsize=(12,6))
+    title = "Assets Price History"
+    my_stocks = data
+    #create and pllot the graph
+    for c in my_stocks.columns.values:
+        plt.plot(my_stocks[c], label = c)
+    plt.title(title)
+    plt.xlabel("Date", fontsize =18)
+    plt.ylabel("Price", fontsize=18)
+    plt.legend(my_stocks.columns.values , loc = "upper left")
+    if save:
+        plt.savefig("assets_price_history.png")
+    # plt.show()
 
 
-def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=False, filename="empyrial_report.pdf"):
+
+def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=False, save_pdf=False, filename="empyrial_report.pdf"):
     if isinstance(my_portfolio.rebalance, pd.DataFrame):
         # we want to get the dataframe with the dates and weights
         rebalance_schedule = my_portfolio.rebalance
@@ -283,9 +308,17 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
               end_date=my_portfolio.end_date,
             )
 
+    # Calculate cumulative returns of the portfolio
     creturns = (returns + 1).cumprod()
 
-    # risk manager
+    # Get benchmark prices (assuming benchmark is a single asset)
+    benchmark_prices = my_portfolio.data_all[my_portfolio.benchmark[0]]
+    
+    ### CALC metrics using PyPortfolioOpt
+    cov_matrix = risk_models.sample_cov(my_portfolio.data) # covariance matrix
+    corr_matrix = my_portfolio.data.corr() # corr matrix
+
+    ### Risk manager
     try:
         if list(my_portfolio.risk_manager.keys())[0] == "Stop Loss":
 
@@ -561,12 +594,12 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
     }
 
     # Create DataFrame
-    df = pd.DataFrame(data)
-    df.set_index("", inplace=True)
-    df.style.set_properties(
+    df_backtest = pd.DataFrame(data)
+    df_backtest.set_index("", inplace=True)
+    df_backtest.style.set_properties(
         **{"background-color": "white", "color": "black", "border-color": "grey"}
     )
-    display(df)
+    display(df_backtest)
 
     empyrial.df = data
 
@@ -774,6 +807,31 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
     for i in sorted(indices, reverse=True):
         del my_portfolio.portfolio[i]
 
+    ### Performance Report ###
+    # Portfolio performance metrics
+    portfolio_performance = {
+        "cagr": empyrial.CAGR,
+        "cumulative_return": empyrial.CUM,
+        "volatility": empyrial.VOL,
+        "sharpe_ratio": empyrial.SR,
+        "calmar_ratio": empyrial.CR,
+        "max_drawdown": empyrial.MD,
+        "sortino_ratio": empyrial.SOR,
+        "alpha": empyrial.AL,
+        "beta": empyrial.BTA,
+    }
+
+    # Benchmark performance metrics
+    benchmark_performance = {
+        "cagr": benchmark_CAGR,
+        "cumulative_return": benchmark_CUM,
+        "volatility": benchmark_VOL,
+        "sharpe_ratio": benchmark_SR,
+        "calmar_ratio": benchmark_CR,
+        "max_drawdown": benchmark_MD,
+        "sortino_ratio": benchmark_SOR,
+    }
+
     if not report:
       qs.plots.returns(returns, benchmark, cumulative=True)
       qs.plots.yearly_returns(returns, benchmark),
@@ -786,6 +844,8 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
       graph_opt(my_portfolio.portfolio, wts, pie_size=7, font_size=14)
 
     else:
+        ret.savefig("ret.png")
+        
         qs.plots.returns(returns, benchmark, cumulative=True, savefig="retbench.png")
         qs.plots.yearly_returns(returns, benchmark, savefig="y_returns.png"),
         qs.plots.monthly_heatmap(returns, benchmark, savefig="heatmap.png")
@@ -795,119 +855,7 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
         qs.plots.rolling_sharpe(returns, savefig="rsharpe.png")
         qs.plots.rolling_beta(returns, benchmark, savefig="rbeta.png")
         graph_opt(my_portfolio.portfolio, wts, pie_size=7, font_size=14, save=True)
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("arial", "B", 14)
-        pdf.image(
-          "https://user-images.githubusercontent.com/61618641/120909011-98f8a180-c670-11eb-8844-2d423ba3fa9c.png",
-          x=None,
-          y=None,
-          w=45,
-          h=5,
-          type="",
-          link="https://github.com/ssantoshp/Empyrial",
-        )
-        pdf.cell(20, 15, f"Report", ln=1)
-        pdf.set_font("arial", size=11)
-        pdf.image("allocation.png", x=135, y=0, w=70, h=70, type="", link="")
-        pdf.cell(20, 7, f"Start date: " + str(first_date), ln=1)
-        pdf.cell(20, 7, f"End date: " + str(last_date), ln=1)
-        ret.savefig("ret.png")
-
-        # pdf.cell(20, 7, f"", ln=1)
-        # pdf.cell(20, 7, f"Annual return: " + str(CAGR), ln=1)
-        # pdf.cell(20, 7, f"Cumulative return: " + str(CUM), ln=1)
-        # pdf.cell(20, 7, f"Annual volatility: " + str(VOL), ln=1)
-        # pdf.cell(20, 7, f"Winning day ratio: " + str(win_ratio), ln=1)
-        # pdf.cell(20, 7, f"Sharpe ratio: " + str(SR), ln=1)
-        # pdf.cell(20, 7, f"Calmar ratio: " + str(CR), ln=1)
-        # pdf.cell(20, 7, f"Information ratio: " + str(IR), ln=1)
-        # pdf.cell(20, 7, f"Stability: " + str(STABILITY), ln=1)
-        # pdf.cell(20, 7, f"Max drawdown: " + str(MD), ln=1)
-        # pdf.cell(20, 7, f"Sortino ratio: " + str(SOR), ln=1)
-        # pdf.cell(20, 7, f"Skew: " + str(SK), ln=1)
-        # pdf.cell(20, 7, f"Kurtosis: " + str(KU), ln=1)
-        # pdf.cell(20, 7, f"Tail ratio: " + str(TA), ln=1)
-        # pdf.cell(20, 7, f"Common sense ratio: " + str(CSR), ln=1)
-        # pdf.cell(20, 7, f"Daily value at risk: " + str(VAR), ln=1)
-        # pdf.cell(20, 7, f"Alpha: " + str(AL), ln=1)
-        # pdf.cell(20, 7, f"Beta: " + str(BTA), ln=1)
-
-        # Printing to PDF side by side
-        pdf.cell(20, 7, f"", ln=1)
-        pdf.set_font("arial", "B", 11)
-        pdf.cell(60, 7, "Metric", ln=0)
-        pdf.cell(60, 7, "Portfolio", ln=0)
-        pdf.cell(60, 7, "Benchmark", ln=1)
-        pdf.set_font("arial", size=11)
-        pdf.cell(60, 7, f"Annual return", ln=0)
-        pdf.cell(60, 7, f"{CAGR}", ln=0)
-        pdf.cell(60, 7, f"{benchmark_CAGR}", ln=1)
-        
-        pdf.cell(60, 7, f"Return", ln=0)
-        pdf.cell(60, 7, f"{portfolio_percent_change_str}", ln=0)
-        pdf.cell(60, 7, f"{benchmark_percent_change_str}", ln=1)
-
-        pdf.cell(60, 7, f"Cumulative return", ln=0)
-        pdf.cell(60, 7, f"{CUM}", ln=0)
-        pdf.cell(60, 7, f"{benchmark_CUM}", ln=1)
-
-        pdf.cell(60, 7, f"Annual volatility", ln=0)
-        pdf.cell(60, 7, f"{VOL}", ln=0)
-        pdf.cell(60, 7, f"{benchmark_VOL}", ln=1)
-
-        pdf.cell(60, 7, f"Winning day ratio", ln=0)
-        pdf.cell(60, 7, f"{win_ratio}%", ln=0)
-        pdf.cell(60, 7, f"-", ln=1)  # Assuming no winning day ratio calculation for benchmark
-
-        pdf.cell(60, 7, f"Sharpe ratio", ln=0)
-        pdf.cell(60, 7, f"{SR}", ln=0)
-        pdf.cell(60, 7, f"{benchmark_SR}", ln=1)
-
-        pdf.cell(60, 7, f"Calmar ratio", ln=0)
-        pdf.cell(60, 7, f"{CR}", ln=0)
-        pdf.cell(60, 7, f"{benchmark_CR}", ln=1)
-
-        pdf.cell(60, 7, f"Information ratio", ln=0)
-        pdf.cell(60, 7, f"{IR}", ln=0)
-        pdf.cell(60, 7, f"-", ln=1)  # Information ratio typically not calculated for the benchmark
-
-        pdf.cell(60, 7, f"Stability", ln=0)
-        pdf.cell(60, 7, f"{STABILITY}", ln=0)
-        pdf.cell(60, 7, f"{benchmark_STABILITY}", ln=1)
-
-        pdf.cell(60, 7, f"Max drawdown", ln=0)
-        pdf.cell(60, 7, f"{MD}", ln=0)
-        pdf.cell(60, 7, f"{benchmark_MD}", ln=1)
-
-        pdf.cell(60, 7, f"Sortino ratio", ln=0)
-        pdf.cell(60, 7, f"{SOR}", ln=0)
-        pdf.cell(60, 7, f"{benchmark_SOR}", ln=1)
-
-        pdf.cell(60, 7, f"Skew", ln=0)
-        pdf.cell(60, 7, f"{SK}", ln=0)
-        pdf.cell(60, 7, f"{benchmark_SK}", ln=1)
-
-        pdf.cell(60, 7, f"Kurtosis", ln=0)
-        pdf.cell(60, 7, f"{KU}", ln=0)
-        pdf.cell(60, 7, f"{benchmark_KU}", ln=1)
-
-        pdf.cell(60, 7, f"Tail ratio", ln=0)
-        pdf.cell(60, 7, f"{TA}", ln=0)
-        pdf.cell(60, 7, f"{benchmark_TA}", ln=1)
-
-        pdf.cell(60, 7, f"Common sense ratio", ln=0)
-        pdf.cell(60, 7, f"{CSR}", ln=0)
-        pdf.cell(60, 7, f"{benchmark_CSR}", ln=1)
-
-        pdf.cell(60, 7, f"Daily value at risk", ln=0)
-        pdf.cell(60, 7, f"{VAR}", ln=0)
-        pdf.cell(60, 7, f"{benchmark_VAR}", ln=1)
-
-        pdf.cell(60, 7, f"Alpha", ln=0)
-        pdf.cell(60, 7, f"{AL}", ln=1)  # Alpha and Beta calculated for portfolio only
-        pdf.cell(60, 7, f"Beta", ln=0)
-        pdf.cell(60, 7, f"{BTA}", ln=1)
+        graph_assets_price_history(my_portfolio.data, save=True)
         
         # Create absolute value comparision plot
         # Ensure the initial values are set for both portfolio and benchmark
@@ -926,36 +874,166 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
         plt.ylabel("Value")
         plt.legend()
         # Save plot as image
-        plot_filename = "portfolio_vs_benchmark.png"
-        plt.savefig(plot_filename)
+        plot_port_vs_benchmark_filename = "portfolio_vs_benchmark.png"
+        plt.savefig(plot_port_vs_benchmark_filename)
         plt.close()
-        # Add the plot image to the PDF
-        pdf.add_page()
-        pdf.image(plot_filename, x=None, y=None, w=200)
-        pdf.cell(20, 7, f"", ln=1)
         
-        # Other plots
-        pdf.image("ret.png", x=-20, y=None, w=250, h=80, type="", link="")
-        pdf.cell(20, 7, f"", ln=1)
-        pdf.image("y_returns.png", x=-20, y=None, w=200, h=100, type="", link="")
-        pdf.cell(20, 7, f"", ln=1)
-        pdf.image("retbench.png", x=None, y=None, w=200, h=100, type="", link="")
-        pdf.cell(20, 7, f"", ln=1)
-        pdf.image("heatmap.png", x=None, y=None, w=200, h=80, type="", link="")
-        pdf.cell(20, 7, f"", ln=1)
-        pdf.image("drawdown.png", x=None, y=None, w=200, h=80, type="", link="")
-        pdf.cell(20, 7, f"", ln=1)
-        pdf.image("d_periods.png", x=None, y=None, w=200, h=80, type="", link="")
-        pdf.cell(20, 7, f"", ln=1)
-        pdf.image("rvol.png", x=None, y=None, w=190, h=80, type="", link="")
-        pdf.cell(20, 7, f"", ln=1)
-        pdf.image("rsharpe.png", x=None, y=None, w=190, h=80, type="", link="")
-        pdf.cell(20, 7, f"", ln=1)
-        pdf.image("rbeta.png", x=None, y=None, w=190, h=80, type="", link="")
+        plt.close('all')
+        
+        ### PDF
+        if save_pdf:
+            # else >> save pdf
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font("arial", "B", 14)
+            pdf.image(
+            "https://i.postimg.cc/yN4LPM46/my-portolio.png",
+            x=None,
+            y=None,
+            w=45,
+            h=5,
+            type="",
+            link="https://google.com/",
+            )
+            pdf.cell(20, 15, f"Report", ln=1)
+            pdf.set_font("arial", size=11)
+            pdf.image("allocation.png", x=135, y=0, w=70, h=70, type="", link="")
+            pdf.cell(20, 7, f"Start date: " + str(first_date), ln=1)
+            pdf.cell(20, 7, f"End date: " + str(last_date), ln=1)
 
-        pdf.output(dest="F", name=filename)
-        print("The PDF was generated successfully!")
+            # pdf.cell(20, 7, f"", ln=1)
+            # pdf.cell(20, 7, f"Annual return: " + str(CAGR), ln=1)
+            # pdf.cell(20, 7, f"Cumulative return: " + str(CUM), ln=1)
+            # pdf.cell(20, 7, f"Annual volatility: " + str(VOL), ln=1)
+            # pdf.cell(20, 7, f"Winning day ratio: " + str(win_ratio), ln=1)
+            # pdf.cell(20, 7, f"Sharpe ratio: " + str(SR), ln=1)
+            # pdf.cell(20, 7, f"Calmar ratio: " + str(CR), ln=1)
+            # pdf.cell(20, 7, f"Information ratio: " + str(IR), ln=1)
+            # pdf.cell(20, 7, f"Stability: " + str(STABILITY), ln=1)
+            # pdf.cell(20, 7, f"Max drawdown: " + str(MD), ln=1)
+            # pdf.cell(20, 7, f"Sortino ratio: " + str(SOR), ln=1)
+            # pdf.cell(20, 7, f"Skew: " + str(SK), ln=1)
+            # pdf.cell(20, 7, f"Kurtosis: " + str(KU), ln=1)
+            # pdf.cell(20, 7, f"Tail ratio: " + str(TA), ln=1)
+            # pdf.cell(20, 7, f"Common sense ratio: " + str(CSR), ln=1)
+            # pdf.cell(20, 7, f"Daily value at risk: " + str(VAR), ln=1)
+            # pdf.cell(20, 7, f"Alpha: " + str(AL), ln=1)
+            # pdf.cell(20, 7, f"Beta: " + str(BTA), ln=1)
 
+            # Printing to PDF side by side
+            pdf.cell(20, 7, f"", ln=1)
+            pdf.set_font("arial", "B", 11)
+            pdf.cell(60, 7, "Metric", ln=0)
+            pdf.cell(60, 7, "Portfolio", ln=0)
+            pdf.cell(60, 7, "Benchmark", ln=1)
+            pdf.set_font("arial", size=11)
+            pdf.cell(60, 7, f"Annual return", ln=0)
+            pdf.cell(60, 7, f"{CAGR}", ln=0)
+            pdf.cell(60, 7, f"{benchmark_CAGR}", ln=1)
+            
+            pdf.cell(60, 7, f"Return", ln=0)
+            pdf.cell(60, 7, f"{portfolio_percent_change_str}", ln=0)
+            pdf.cell(60, 7, f"{benchmark_percent_change_str}", ln=1)
+
+            pdf.cell(60, 7, f"Cumulative return", ln=0)
+            pdf.cell(60, 7, f"{CUM}", ln=0)
+            pdf.cell(60, 7, f"{benchmark_CUM}", ln=1)
+
+            pdf.cell(60, 7, f"Annual volatility", ln=0)
+            pdf.cell(60, 7, f"{VOL}", ln=0)
+            pdf.cell(60, 7, f"{benchmark_VOL}", ln=1)
+
+            pdf.cell(60, 7, f"Winning day ratio", ln=0)
+            pdf.cell(60, 7, f"{win_ratio}%", ln=0)
+            pdf.cell(60, 7, f"-", ln=1)  # Assuming no winning day ratio calculation for benchmark
+
+            pdf.cell(60, 7, f"Sharpe ratio", ln=0)
+            pdf.cell(60, 7, f"{SR}", ln=0)
+            pdf.cell(60, 7, f"{benchmark_SR}", ln=1)
+
+            pdf.cell(60, 7, f"Calmar ratio", ln=0)
+            pdf.cell(60, 7, f"{CR}", ln=0)
+            pdf.cell(60, 7, f"{benchmark_CR}", ln=1)
+
+            pdf.cell(60, 7, f"Information ratio", ln=0)
+            pdf.cell(60, 7, f"{IR}", ln=0)
+            pdf.cell(60, 7, f"-", ln=1)  # Information ratio typically not calculated for the benchmark
+
+            pdf.cell(60, 7, f"Stability", ln=0)
+            pdf.cell(60, 7, f"{STABILITY}", ln=0)
+            pdf.cell(60, 7, f"{benchmark_STABILITY}", ln=1)
+
+            pdf.cell(60, 7, f"Max drawdown", ln=0)
+            pdf.cell(60, 7, f"{MD}", ln=0)
+            pdf.cell(60, 7, f"{benchmark_MD}", ln=1)
+
+            pdf.cell(60, 7, f"Sortino ratio", ln=0)
+            pdf.cell(60, 7, f"{SOR}", ln=0)
+            pdf.cell(60, 7, f"{benchmark_SOR}", ln=1)
+
+            pdf.cell(60, 7, f"Skew", ln=0)
+            pdf.cell(60, 7, f"{SK}", ln=0)
+            pdf.cell(60, 7, f"{benchmark_SK}", ln=1)
+
+            pdf.cell(60, 7, f"Kurtosis", ln=0)
+            pdf.cell(60, 7, f"{KU}", ln=0)
+            pdf.cell(60, 7, f"{benchmark_KU}", ln=1)
+
+            pdf.cell(60, 7, f"Tail ratio", ln=0)
+            pdf.cell(60, 7, f"{TA}", ln=0)
+            pdf.cell(60, 7, f"{benchmark_TA}", ln=1)
+
+            pdf.cell(60, 7, f"Common sense ratio", ln=0)
+            pdf.cell(60, 7, f"{CSR}", ln=0)
+            pdf.cell(60, 7, f"{benchmark_CSR}", ln=1)
+
+            pdf.cell(60, 7, f"Daily value at risk", ln=0)
+            pdf.cell(60, 7, f"{VAR}", ln=0)
+            pdf.cell(60, 7, f"{benchmark_VAR}", ln=1)
+
+            pdf.cell(60, 7, f"Alpha", ln=0)
+            pdf.cell(60, 7, f"{AL}", ln=1)  # Alpha and Beta calculated for portfolio only
+            pdf.cell(60, 7, f"Beta", ln=0)
+            pdf.cell(60, 7, f"{BTA}", ln=1)
+            
+            # Add the plot image to the PDF
+            pdf.add_page()
+            pdf.image(plot_port_vs_benchmark_filename, x=None, y=None, w=200)
+            pdf.cell(20, 7, f"", ln=1)
+            
+            # Other plots
+            pdf.image("ret.png", x=-20, y=None, w=250, h=80, type="", link="")
+            pdf.cell(20, 7, f"", ln=1)
+            pdf.image("y_returns.png", x=-20, y=None, w=200, h=100, type="", link="")
+            pdf.cell(20, 7, f"", ln=1)
+            pdf.image("retbench.png", x=None, y=None, w=200, h=100, type="", link="")
+            pdf.cell(20, 7, f"", ln=1)
+            pdf.image("heatmap.png", x=None, y=None, w=200, h=80, type="", link="")
+            pdf.cell(20, 7, f"", ln=1)
+            pdf.image("drawdown.png", x=None, y=None, w=200, h=80, type="", link="")
+            pdf.cell(20, 7, f"", ln=1)
+            pdf.image("d_periods.png", x=None, y=None, w=200, h=80, type="", link="")
+            pdf.cell(20, 7, f"", ln=1)
+            pdf.image("rvol.png", x=None, y=None, w=190, h=80, type="", link="")
+            pdf.cell(20, 7, f"", ln=1)
+            pdf.image("rsharpe.png", x=None, y=None, w=190, h=80, type="", link="")
+            pdf.cell(20, 7, f"", ln=1)
+            pdf.image("rbeta.png", x=None, y=None, w=190, h=80, type="", link="")
+
+            pdf.output(dest="F", name=filename)
+            print("The PDF was generated successfully!")
+
+    # Return relevant data
+    return {
+        "cov_matrix": cov_matrix,
+        "corr_matrix": corr_matrix,
+        "portfolio_df": df_backtest,
+        "stock_prices": my_portfolio.data,
+        "benchmark_df": df_benchmark,
+        "benchmark_prices": benchmark_prices,
+        "cumulative_returns": creturns,
+        "weights_orderbook": empyrial.orderbook,
+    }
 
 def flatten(subject) -> list:
     muster = []
@@ -975,7 +1053,7 @@ def graph_opt(my_portfolio, my_weights, pie_size, font_size, save=False):
     plt.rcParams["font.size"] = font_size
     if save:
       plt.savefig("allocation.png")
-    plt.show()
+    # plt.show()
 
 
 def equal_weighting(my_portfolio) -> list:
@@ -1269,7 +1347,9 @@ def optimize_portfolio(my_portfolio, vol_max=25, pie_size=5, font_size=14):
     h2, l2 = ax2.get_legend_handles_labels()
 
     plt.legend(l1 + l2, loc=2)
-    plt.show()
+    # plt.show()
+    plt.savefig("equal-weights-vs-optimized-cum-returns.png")
+    plt.close('all')
 
 
 def check_schedule(rebalance) -> bool:
