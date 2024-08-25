@@ -96,8 +96,10 @@ class Engine:
         data_all=pd.DataFrame(),
         cash_ratio_is_dynamic = False,
         cash_ratio=0.30,  # Add a cash_ratio parameter with a default value of 30%
+        risk_score_data = None
     ):
         self.cash_ratio_is_dynamic = cash_ratio_is_dynamic
+        self.risk_score_data = risk_score_data
         
         # Adding "Cash" to portfolio
         self.cash_ratio = cash_ratio
@@ -125,8 +127,15 @@ class Engine:
         self.min_weights = min_weights
         self.risk_manager = risk_manager
 
+        # Generate synthetic cash prices with small fluctuations
+        # Avoid err: ValueError: Quadratic form matrices must be symmetric/Hermitian
+        np.random.seed(68)
+        num_days = len(data.index)
+        cash_returns = np.random.normal(0, 0.005, size=num_days)  # 0 mean return, 0.5% std dev
+        cash_prices = 1 + np.cumsum(cash_returns)  # Start at 1 and simulate price changes
+
         # Add a constant price of 1 for the "Cash" column
-        data["Cash"] = 1
+        data["Cash"] = cash_prices
         
         # Backup data to data_all
         self.data_all = data.loc[pd.to_datetime(self.start_date).date():pd.to_datetime(self.end_date).date()]
@@ -184,8 +193,53 @@ class Engine:
 
                 self.cash_ratio_is_dynamic,
                 self.cash_ratio,  # Pass the cash_ratio to the rebalancing function
-                # cash_ratio_dyn
+                self.risk_score_data,
             )
+
+def calculate_cash_ratio(date, risk_acceptance, risk_score_data):
+    """
+    Calculate the cash ratio based on the market risk score and risk acceptance.
+
+    :param date: Date of calculating cash ratio.
+    :param risk_acceptance: User's risk acceptance level (0.0 to 1.0). But SHOULD BE 0.8 to 0.9
+    :param risk_score_data: Dictionary containing date as keys and risk scores as values.
+    :return: Calculated cash ratio.
+    """
+    
+    # Convert input date to a datetime object if it's not already
+    if isinstance(date, str):
+        date = dt.datetime.strptime(date, "%Y-%m-%d").date()
+    elif isinstance(date, dt.datetime):
+        date = date.date()
+
+    # Filter the dictionary for dates before or equal to the input date
+    valid_dates = {k: v for k, v in risk_score_data.items() if k <= date}
+
+    # Find the most recent risk score before the input date
+    if valid_dates:
+        most_recent_date = max(valid_dates.keys())
+        risk_score = valid_dates[most_recent_date]
+    else:
+        risk_score = 40  # Default to score of 40 if no valid dates are found
+
+    # Determine the maximum stock weight based on the risk score
+    if risk_score < 35:
+        max_stock_weight = 1.0
+    elif 35 <= risk_score < 45:
+        max_stock_weight = 0.7
+    elif 45 <= risk_score < 57:
+        max_stock_weight = 0.6
+    elif 57 <= risk_score < 64:
+        max_stock_weight = 0.5
+    else:
+        max_stock_weight = 0.35
+
+    # Calculate desired stock ratio based on risk acceptance
+    desired_stock_ratio = max_stock_weight * risk_acceptance
+
+    # Calculate and return the cash ratio
+    cash_ratio = 1.0 - desired_stock_ratio
+    return cash_ratio
 
 def calculate_percent_change_from_cagr(cagr, start_date, end_date):
     # Calculate the number of years between the start and end dates
@@ -1119,6 +1173,7 @@ def efficient_frontier(my_portfolio, perf=True) -> list:
         ef.add_constraint(lambda x: x >= my_portfolio.min_weights)
     if my_portfolio.max_weights is not None:
         ef.add_constraint(lambda x: x <= my_portfolio.max_weights)
+
     weights = ef.max_sharpe()
     cleaned_weights = ef.clean_weights()
     wts = cleaned_weights.items()
@@ -1455,6 +1510,8 @@ def make_rebalance(
     data_all,
     cash_ratio_is_dynamic,
     cash_ratio,  # Add cash_ratio parameter
+    risk_score_data,
+    
 ) -> pd.DataFrame:
     sdate = str(start_date)[:10]
     if rebalance[0] != sdate:
@@ -1489,8 +1546,9 @@ def make_rebalance(
         ### dummy condition: random
         # the_dynamic_cash_ratio = random.uniform(0.1, 0.6)
 
-        if cash_ratio_is_dynamic:
-            the_dynamic_cash_ratio = random.uniform(0.1, 0.6)
+        if cash_ratio_is_dynamic and risk_score_data is not None:
+            # the_dynamic_cash_ratio = random.uniform(0.1, 0.6)
+            the_dynamic_cash_ratio = calculate_cash_ratio(dates[i+1], 1.0, risk_score_data)
         else:
             the_dynamic_cash_ratio = cash_ratio
 
@@ -1512,7 +1570,8 @@ def make_rebalance(
                 data=df, # Ensure custom data is passed here
                 data_all=data_all,
                 cash_ratio_is_dynamic = cash_ratio_is_dynamic,
-                cash_ratio=the_dynamic_cash_ratio
+                cash_ratio=the_dynamic_cash_ratio,
+                risk_score_data = risk_score_data,
             )
 
         except TypeError:
@@ -1531,7 +1590,8 @@ def make_rebalance(
                 data=df, # Ensure custom data is passed here
                 data_all=data_all,
                 cash_ratio_is_dynamic = cash_ratio_is_dynamic,
-                cash_ratio=the_dynamic_cash_ratio
+                cash_ratio=the_dynamic_cash_ratio,
+                risk_score_data = risk_score_data,
             )
         
         # Adjust the weights dynamically
@@ -1565,7 +1625,8 @@ def make_rebalance(
             data=df, # Ensure custom data is passed here
             data_all=data_all,
             cash_ratio_is_dynamic = cash_ratio_is_dynamic,
-            cash_ratio=the_dynamic_cash_ratio
+            cash_ratio=the_dynamic_cash_ratio,
+            risk_score_data = risk_score_data,
         )
 
     except TypeError:
@@ -1583,7 +1644,8 @@ def make_rebalance(
             data=df, # Ensure custom data is passed here
             data_all=data_all,
             cash_ratio_is_dynamic = cash_ratio_is_dynamic,
-            cash_ratio=the_dynamic_cash_ratio
+            cash_ratio=the_dynamic_cash_ratio,
+            risk_score_data = risk_score_data,
         )
     
     # Adjust the weights dynamically
