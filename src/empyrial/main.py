@@ -10,6 +10,7 @@ import yfinance as yf
 from fpdf import FPDF
 import warnings
 import logging
+import random
 
 # Optional: switch to 'Agg' backend for non-interactive plots
 matplotlib.use('Agg')
@@ -93,13 +94,21 @@ class Engine:
         risk_manager=None,
         data=pd.DataFrame(),
         data_all=pd.DataFrame(),
+        cash_ratio_is_dynamic = False,
+        cash_ratio=0.30,  # Add a cash_ratio parameter with a default value of 30%
     ):
+        self.cash_ratio_is_dynamic = cash_ratio_is_dynamic
+        
+        # Adding "Cash" to portfolio
+        self.cash_ratio = cash_ratio
+        self.portfolio = ["Cash"] + portfolio
+
         if benchmark is None:
             benchmark = BENCHMARK
 
         self.start_date = start_date
         self.end_date = end_date
-        self.portfolio = portfolio
+        # self.portfolio = portfolio
         self.weights = weights
         self.benchmark = benchmark
         self.optimizer = optimizer
@@ -115,6 +124,9 @@ class Engine:
         self.max_weights = max_weights
         self.min_weights = min_weights
         self.risk_manager = risk_manager
+
+        # Add a constant price of 1 for the "Cash" column
+        data["Cash"] = 1
         
         # Backup data to data_all
         self.data_all = data.loc[pd.to_datetime(self.start_date).date():pd.to_datetime(self.end_date).date()]
@@ -127,7 +139,16 @@ class Engine:
         # print(f"The first date where all stocks have data is: {first_valid_date.strftime('%Y-%m-%d')}")
         # Update self.start_date with this date in "YYYY-MM-DD" format
         self.start_date = first_valid_date.strftime('%Y-%m-%d')
+
+        # Initialize weights if not provided
+        if weights is None:
+            weights = [1.0 / len(portfolio)] * len(portfolio)
         
+        # Adjust weights to include the initial cash ratio
+        # print(f"self.cash_ratio: {self.cash_ratio}")
+        # print(f"weights: {weights}")
+        adjusted_weights = [(1 - self.cash_ratio) * w for w in weights]
+        self.weights = [self.cash_ratio] + adjusted_weights  # Add cash weight to the start of the weights list
 
         optimizers = {
             "EF": efficient_frontier,
@@ -143,6 +164,7 @@ class Engine:
             else:
                 self.weights = optimizers.get(self.optimizer)(self, perf=False)
 
+        # Rebalance if required
         if self.rebalance is not None:
             self.rebalance = make_rebalance(
                 self.start_date,
@@ -158,7 +180,11 @@ class Engine:
                 self.expected_returns,
                 self.risk_model,
                 self.data,
-                self.data_all
+                self.data_all,
+
+                self.cash_ratio_is_dynamic,
+                self.cash_ratio,  # Pass the cash_ratio to the rebalancing function
+                # cash_ratio_dyn
             )
 
 def calculate_percent_change_from_cagr(cagr, start_date, end_date):
@@ -1402,6 +1428,15 @@ def get_date_range(start_date, end_date, rebalance) -> list:
     # then we want to return those dates
     return rebalance_dates
 
+def scale_weights_for_cash(weights, cash_ratio):
+    # Adjust the weights dynamically
+    current_cash_ratio = cash_ratio
+    other_weights_sum = sum(weights[1:])  # Exclude cash weight
+
+    # Scale the other weights to fit within the remaining allocation after cash
+    scaled_weights = [current_cash_ratio] + [(1.0 - current_cash_ratio) * w / other_weights_sum for w in weights[1:]]
+    return scaled_weights
+
 def make_rebalance(
     start_date,
     end_date,
@@ -1416,7 +1451,9 @@ def make_rebalance(
     expected_returns,
     risk_model,
     df,
-    data_all
+    data_all,
+    cash_ratio_is_dynamic,
+    cash_ratio,  # Add cash_ratio parameter
 ) -> pd.DataFrame:
     sdate = str(start_date)[:10]
     if rebalance[0] != sdate:
@@ -1446,8 +1483,18 @@ def make_rebalance(
     # then make a dataframe with the index being the tickers
     output_df = pd.DataFrame(index=portfolio_input)
 
+    the_dynamic_cash_ratio = cash_ratio
     for i in range(len(dates) - 1):
+        ### dummy condition: random
+        # the_dynamic_cash_ratio = random.uniform(0.1, 0.6)
 
+        if cash_ratio_is_dynamic:
+            the_dynamic_cash_ratio = random.uniform(0.1, 0.6)
+        else:
+            the_dynamic_cash_ratio = cash_ratio
+
+        print(f"--- CASH RATIO (dynamic={cash_ratio_is_dynamic}): {the_dynamic_cash_ratio}")
+        
         try:
             portfolio = Engine(
                 start_date=dates[0],
@@ -1462,7 +1509,9 @@ def make_rebalance(
                 expected_returns=expected_returns,
                 risk_model=risk_model,
                 data=df, # Ensure custom data is passed here
-                data_all=data_all
+                data_all=data_all,
+                cash_ratio_is_dynamic = cash_ratio_is_dynamic,
+                cash_ratio=the_dynamic_cash_ratio
             )
 
         except TypeError:
@@ -1479,9 +1528,14 @@ def make_rebalance(
                 expected_returns=expected_returns,
                 risk_model=risk_model,
                 data=df, # Ensure custom data is passed here
-                data_all=data_all
+                data_all=data_all,
+                cash_ratio_is_dynamic = cash_ratio_is_dynamic,
+                cash_ratio=the_dynamic_cash_ratio
             )
         
+        # Adjust the weights dynamically
+        portfolio.weights = scale_weights_for_cash(portfolio.weights, portfolio.cash_ratio)
+
         # Orig. code
         output_df["{}".format(dates[i + 1])] = portfolio.weights
         
@@ -1508,7 +1562,9 @@ def make_rebalance(
             expected_returns=expected_returns,
             risk_model=risk_model,
             data=df, # Ensure custom data is passed here
-            data_all=data_all
+            data_all=data_all,
+            cash_ratio_is_dynamic = cash_ratio_is_dynamic,
+            cash_ratio=the_dynamic_cash_ratio
         )
 
     except TypeError:
@@ -1524,10 +1580,14 @@ def make_rebalance(
             expected_returns=expected_returns,
             risk_model=risk_model,
             data=df, # Ensure custom data is passed here
-            data_all=data_all
+            data_all=data_all,
+            cash_ratio_is_dynamic = cash_ratio_is_dynamic,
+            cash_ratio=the_dynamic_cash_ratio
         )
     
-    # Orig. code
+    # Adjust the weights dynamically
+    portfolio.weights = scale_weights_for_cash(portfolio.weights, portfolio.cash_ratio)
+
     output_df["{}".format(TODAY)] = portfolio.weights
 
     make_rebalance.output = output_df
