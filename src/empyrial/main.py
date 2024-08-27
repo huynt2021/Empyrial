@@ -34,6 +34,7 @@ from pypfopt import (
     # black_litterman,
     # BlackLittermanModel,
 )
+from pypfopt.exceptions import OptimizationError
 
 warnings.filterwarnings("ignore")
 logging.getLogger('matplotlib.font_manager').disabled = True
@@ -73,6 +74,16 @@ CS = [
           "#fad6ff",
       ]
 
+def print_full_pd_df(x):
+    pd.set_option('display.max_rows', None)
+    pd.set_option('display.max_columns', None)
+
+    print(x)
+
+    # Resetting to default
+    pd.reset_option('display.max_rows')
+    pd.reset_option('display.max_columns')
+
 class Engine:
     def __init__(
         self,
@@ -93,7 +104,7 @@ class Engine:
         max_weights=None,
         risk_manager=None,
         data=pd.DataFrame(),
-        data_all=pd.DataFrame(),
+        data_all=None,
         cash_ratio_is_dynamic = False,
         cash_ratio=0.30,  # Add a cash_ratio parameter with a default value of 30%
         risk_score_data = None,
@@ -141,18 +152,29 @@ class Engine:
         self.max_weights = max_weights
         self.min_weights = min_weights
         self.risk_manager = risk_manager
-        
-        # Backup data to data_all
-        self.data_all = data.loc[pd.to_datetime(self.start_date).date():pd.to_datetime(self.end_date).date()]
-        
+
+        # print(f"ORIG.data:\n")
+        # print_full_pd_df(data.head(100))
+
         # Filter the data to the portfolio and the date range
         # Start portfolio from the first date when all assets not N/A, NaN
         self.data = data.filter(self.portfolio).loc[pd.to_datetime(self.start_date).date():pd.to_datetime(self.end_date).date()]
+        # print(f"self.data: {data}")
+
         # Find the first date with no missing data
         first_valid_date = self.data.dropna().index.min()
+        # print(f"first_valid_date: {first_valid_date}")
         # print(f"The first date where all stocks have data is: {first_valid_date.strftime('%Y-%m-%d')}")
         # Update self.start_date with this date in "YYYY-MM-DD" format
         self.start_date = first_valid_date.strftime('%Y-%m-%d')
+
+        # truncate self.data and self.data_all to start from first_valid_date
+        self.data = self.data.loc[first_valid_date:]
+
+        # Backup data to data_all
+        self.data_all = data_all
+        if self.data_all is None:
+            self.data_all = data.filter(self.portfolio+self.benchmark).loc[first_valid_date:pd.to_datetime(self.end_date).date()]
 
         # Initialize weights if not provided
         if weights is None:
@@ -597,12 +619,12 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
     # Assuming CAGR is already calculated and is in decimal form (not percentage)
     portfolio_percent_change = calculate_percent_change_from_cagr(CAGR_VAL, first_date, last_date)
     portfolio_percent_change_str = str(round(portfolio_percent_change, 2)) + "%"
-    portfolio_percent_change_str = f"{portfolio_percent_change_str} over {num_years_invested} yrs"
+    portfolio_percent_change_str = f"{portfolio_percent_change_str}"
 
     CUM = cum_returns(returns, starting_value=0, out=None) * 100
     CUM = CUM.iloc[-1]
     CUM = CUM.tolist()
-    CUM = str(round(CUM, 2)) + "%"
+    CUM = f"{str(round(CUM, 2))} % over {num_years_invested} yrs"
 
     VOL = qs.stats.volatility(returns, annualize=True)
     VOL = VOL.tolist()
@@ -679,41 +701,41 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
 
     data = {
         "": [
-            "Annual return",
-            "Return",
+            "Annual return CAGR",
+            # "Return",
             "Cumulative return",
-            "Annual volatility",
-            "Winning day ratio",
             "Sharpe ratio",
+            "Sortino ratio",
+            "Common sense ratio",
+            "Annual volatility",
+            "Max Drawdown",
             "Calmar ratio",
+            "Winning day ratio",
             "Information ratio",
             "Stability",
-            "Max Drawdown",
-            "Sortino ratio",
             "Skew",
             "Kurtosis",
             "Tail Ratio",
-            "Common sense ratio",
             "Daily value at risk",
             "Alpha",
             "Beta",
         ],
-        "Backtest": [
+        "Portfolio/Backtest": [
             CAGR,
-            portfolio_percent_change_str,
+            # portfolio_percent_change_str,
             CUM,
-            VOL,
-            f"{win_ratio}%",
             SR,
+            SOR,
+            CSR,
+            VOL,
+            MD,            
             CR,
+            f"{win_ratio}%",
             IR,
             STABILITY,
-            MD,
-            SOR,
             SK,
             KU,
             TA,
-            CSR,
             VAR,
             AL,
             BTA,
@@ -822,11 +844,11 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
     
     benchmark_percent_change = calculate_percent_change_from_cagr(benchmark_CAGR_VAL, first_date, last_date)
     benchmark_percent_change_str = str(round(benchmark_percent_change, 2)) + "%"
-    benchmark_percent_change_str = f"{benchmark_percent_change_str} over {num_years_invested} yrs"
+    benchmark_percent_change_str = f"{benchmark_percent_change_str}"
 
     benchmark_CUM = cum_returns(benchmark_df[benchmark_column], starting_value=0, out=None) * 100
     benchmark_CUM = benchmark_CUM.iloc[-1]
-    benchmark_CUM = str(round(benchmark_CUM, 2)) + "%"
+    benchmark_CUM = f"{str(round(benchmark_CUM, 2))} % over {num_years_invested} yrs"
 
     benchmark_VOL = qs.stats.volatility(benchmark_df[benchmark_column], annualize=True)
     benchmark_VOL = str(round(benchmark_VOL * 100, 2)) + " %"
@@ -863,41 +885,41 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
     
     stats_benchmark = {
         "": [
-            "Annual return",
-            "Return",
+            "Annual return CAGR",
+            # "Return",
             "Cumulative return",
-            "Annual volatility",
-            "Winning day ratio",
             "Sharpe ratio",
+            "Sortino ratio",
+            "Common sense ratio",
+            "Annual volatility",
+            "Max Drawdown",
             "Calmar ratio",
+            "Winning day ratio",
             "Information ratio",
             "Stability",
-            "Max Drawdown",
-            "Sortino ratio",
             "Skew",
             "Kurtosis",
             "Tail Ratio",
-            "Common sense ratio",
             "Daily value at risk",
             "Alpha",
             "Beta",
         ],
         "Benchmark": [
             benchmark_CAGR,
-            benchmark_percent_change_str,
+            # benchmark_percent_change_str,
             benchmark_CUM,
-            benchmark_VOL,
-            "N/A",
             benchmark_SR,
+            benchmark_SOR,
+            benchmark_CSR,
+            benchmark_VOL,
+            benchmark_MD,
             benchmark_CR,
             "N/A",
+            "N/A",
             benchmark_STABILITY,
-            benchmark_MD,
-            benchmark_SOR,
             benchmark_SK,
             benchmark_KU,
             benchmark_TA,
-            benchmark_CSR,
             benchmark_VAR,
             "--",
             "--",
@@ -1215,13 +1237,36 @@ def efficient_frontier(my_portfolio, perf=True) -> list:
 
     # optimize for max sharpe ratio
     ef = EfficientFrontier(mu, S)
+
+    # Add constraints
     ef.add_objective(objective_functions.L2_reg, gamma=my_portfolio.diversification)
     if my_portfolio.min_weights is not None:
         ef.add_constraint(lambda x: x >= my_portfolio.min_weights)
     if my_portfolio.max_weights is not None:
         ef.add_constraint(lambda x: x <= my_portfolio.max_weights)
 
-    weights = ef.max_sharpe()
+    # ef.max_sharpe()  # or whatever optimization you're performing
+
+    # Initial diversification setting
+    diversification = my_portfolio.diversification
+    # Retry loop with a maximum number of retries
+    max_retries = 5
+    retry_count = 0
+    success = False
+    while not success and retry_count < max_retries:
+        try:
+            if retry_count > 0:
+                ef = EfficientFrontier(mu, S)
+                ef.add_objective(objective_functions.L2_reg, gamma=diversification)
+                
+            ef.max_sharpe()  # Try to optimize with current diversification
+            success = True
+        except OptimizationError as e:
+            retry_count += 1
+            print(f"Optimization failed on attempt {retry_count}: {e}")
+            print("Adjusting diversification and trying again...")
+            diversification *= 0.95  # Adjust the diversification parameter (reduce by 10%)
+    
     cleaned_weights = ef.clean_weights()
     wts = cleaned_weights.items()
 
