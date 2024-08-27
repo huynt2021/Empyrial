@@ -1258,7 +1258,7 @@ def efficient_frontier(my_portfolio, perf=True) -> list:
             if retry_count > 0:
                 ef = EfficientFrontier(mu, S)
                 ef.add_objective(objective_functions.L2_reg, gamma=diversification)
-                
+
             ef.max_sharpe()  # Try to optimize with current diversification
             success = True
         except OptimizationError as e:
@@ -1266,7 +1266,15 @@ def efficient_frontier(my_portfolio, perf=True) -> list:
             print(f"Optimization failed on attempt {retry_count}: {e}")
             print("Adjusting diversification and trying again...")
             diversification *= 0.95  # Adjust the diversification parameter (reduce by 10%)
-    
+        except ValueError as e:
+            retry_count += 1
+            print(f"Max Sharpe optimization failed: {e}\n")
+            # Fall back to a different strategy or notify the user
+            if "must have an expected return exceeding the risk-free rate" in str(e):
+                print("Optimization failed: all expected returns are below the risk-free rate.")
+                print(f"Max Sharpe optimization failed: {e}\nSwitching to Min Volatility...")
+                ef.min_volatility()
+
     cleaned_weights = ef.clean_weights()
     wts = cleaned_weights.items()
 
@@ -1605,11 +1613,14 @@ def scale_weights_for_cash(weights, cash_ratio):
     scaled_weights_total = sum(scaled_weights)
 
     other_weights_sum = scaled_weights_total - abs(scaled_weights[0])
-    if other_weights_sum == 0:
-        raise ValueError("Sum of other weights cannot be zero when scaling.")
 
-    scaled_weights = [(1.0 - cash_ratio) * w / other_weights_sum for w in scaled_weights]
-    scaled_weights[0] = cash_ratio # restore cash weight
+    scaled_weights = weights
+    if other_weights_sum == 0:
+        print(f"weights (err): \n{weights}")
+        # raise ValueError("Sum of other weights cannot be zero when scaling.")
+    else:
+        scaled_weights = [(1.0 - cash_ratio) * w / other_weights_sum for w in scaled_weights]
+        scaled_weights[0] = cash_ratio # restore cash weight
 
     return scaled_weights
 
