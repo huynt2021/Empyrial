@@ -96,14 +96,29 @@ class Engine:
         data_all=pd.DataFrame(),
         cash_ratio_is_dynamic = False,
         cash_ratio=0.30,  # Add a cash_ratio parameter with a default value of 30%
-        risk_score_data = None
+        risk_score_data = None,
+        risk_acceptance = 0.95
     ):
         self.cash_ratio_is_dynamic = cash_ratio_is_dynamic
         self.risk_score_data = risk_score_data
+        self.risk_acceptance = risk_acceptance
         
-        # Adding "Cash" to portfolio
         self.cash_ratio = cash_ratio
-        self.portfolio = ["Cash"] + portfolio
+        # Adding "Cash" to portfolio
+        if "Cash" not in portfolio:
+            portfolio = ["Cash"] + portfolio
+
+            # Generate synthetic cash prices with small fluctuations
+            # Avoid err: ValueError: Quadratic form matrices must be symmetric/Hermitian
+            np.random.seed(68)
+            num_days = len(data.index)
+            cash_returns = np.random.normal(0, 0.005, size=num_days)  # 0 mean return, 0.5% std dev
+            cash_prices = 1 + np.cumsum(cash_returns)  # Start at 1 and simulate price changes
+
+            # Add a constant price of 1 for the "Cash" column
+            data["Cash"] = cash_prices
+
+        self.portfolio = portfolio
 
         if benchmark is None:
             benchmark = BENCHMARK
@@ -126,16 +141,6 @@ class Engine:
         self.max_weights = max_weights
         self.min_weights = min_weights
         self.risk_manager = risk_manager
-
-        # Generate synthetic cash prices with small fluctuations
-        # Avoid err: ValueError: Quadratic form matrices must be symmetric/Hermitian
-        np.random.seed(68)
-        num_days = len(data.index)
-        cash_returns = np.random.normal(0, 0.005, size=num_days)  # 0 mean return, 0.5% std dev
-        cash_prices = 1 + np.cumsum(cash_returns)  # Start at 1 and simulate price changes
-
-        # Add a constant price of 1 for the "Cash" column
-        data["Cash"] = cash_prices
         
         # Backup data to data_all
         self.data_all = data.loc[pd.to_datetime(self.start_date).date():pd.to_datetime(self.end_date).date()]
@@ -154,8 +159,6 @@ class Engine:
             weights = [1.0 / len(portfolio)] * len(portfolio)
         
         # Adjust weights to include the initial cash ratio
-        # print(f"self.cash_ratio: {self.cash_ratio}")
-        # print(f"weights: {weights}")
         adjusted_weights = [(1 - self.cash_ratio) * w for w in weights]
         self.weights = [self.cash_ratio] + adjusted_weights  # Add cash weight to the start of the weights list
 
@@ -194,9 +197,10 @@ class Engine:
                 self.cash_ratio_is_dynamic,
                 self.cash_ratio,  # Pass the cash_ratio to the rebalancing function
                 self.risk_score_data,
+                self.risk_acceptance,
             )
 
-def calculate_cash_ratio(date, risk_acceptance, risk_score_data):
+def calculate_cash_ratio(risk_acceptance = 0.85, risk_score_data = None, start_date = None, end_date = None, last_start_date = None, last_end_date = None):
     """
     Calculate the cash ratio based on the market risk score and risk acceptance.
 
@@ -207,38 +211,101 @@ def calculate_cash_ratio(date, risk_acceptance, risk_score_data):
     """
     
     # Convert input date to a datetime object if it's not already
-    if isinstance(date, str):
-        date = dt.datetime.strptime(date, "%Y-%m-%d").date()
-    elif isinstance(date, dt.datetime):
-        date = date.date()
+    if isinstance(end_date, str):
+        date = dt.datetime.strptime(end_date, "%Y-%m-%d").date()
+    elif isinstance(end_date, dt.datetime):
+        date = end_date.date()
 
     # Filter the dictionary for dates before or equal to the input date
     valid_dates = {k: v for k, v in risk_score_data.items() if k <= date}
 
-    # Find the most recent risk score before the input date
+    # Step 1: Get the most recent risk score before the given date
+    most_recent_score = 35
     if valid_dates:
         most_recent_date = max(valid_dates.keys())
-        risk_score = valid_dates[most_recent_date]
-    else:
-        risk_score = 40  # Default to score of 40 if no valid dates are found
+        most_recent_score = valid_dates[most_recent_date]
+
+    # Step 2: Calculate the average risk score for the current rebalancing period
+    current_period_scores = [score for d, score in risk_score_data.items() if start_date.date() <= d <= end_date.date()]
+    current_avg_score = sum(current_period_scores) / len(current_period_scores) if current_period_scores else 35
+
+    # Step 3: Calculate the average risk score for the last rebalancing period
+    last_avg_score = 35
+    if last_start_date and last_end_date:
+        last_period_scores = [score for d, score in risk_score_data.items() if last_start_date.date() <= d <= last_end_date.date()]
+        last_avg_score = sum(last_period_scores) / len(last_period_scores) if last_period_scores else 35
+
+    # Step 4: Calculate the change in the average risk score from the last period to the current period/score
+    # score_change = (most_recent_score - last_avg_score) / last_avg_score * 100
+    score_change = (most_recent_score - last_avg_score)
+
+    # Step 5: Weighting the factors (you can adjust these weights as necessary)
+
+    # weight_most_recent = 0.55
+    # weight_current_avg = 0.2
+    # weight_score_change = 0.15
+    # weight_last_avg = 0.1
+
+    # weight_most_recent = 0.3
+    # weight_current_avg = 0.2
+    # weight_score_change = 0.1
+    # weight_last_avg = 0.4
+
+    weight_most_recent = 0.7
+    weight_current_avg = 0.2
+    weight_score_change = 0.0
+    weight_last_avg = 0.1
+
+    risk_score = (
+        weight_most_recent * most_recent_score +
+        weight_current_avg * current_avg_score +
+        weight_score_change * score_change +
+        weight_last_avg * last_avg_score
+    )
+
+    # Find the most recent risk score before the input date
+    # if valid_dates:
+    #     most_recent_date = max(valid_dates.keys())
+    #     risk_score = valid_dates[most_recent_date]
+    # else:
+    #     risk_score = 40  # Default to score of 40 if no valid dates are found
 
     # Determine the maximum stock weight based on the risk score
-    if risk_score < 35:
-        max_stock_weight = 1.0
-    elif 35 <= risk_score < 45:
-        max_stock_weight = 0.7
-    elif 45 <= risk_score < 57:
-        max_stock_weight = 0.6
-    elif 57 <= risk_score < 64:
-        max_stock_weight = 0.5
-    else:
-        max_stock_weight = 0.35
+    # Initialize max_stock_weight
+    max_stock_weight = 0.5  # Default to the lowest weight if no range is matched
+
+    # DEFAULT
+    # risk_ranges = [
+    #     (0, 35, 1.0),
+    #     (35, 45, 0.7),
+    #     (45, 57, 0.6),
+    #     (57, 64, 0.5),
+    #     (64, 100, 0.35)
+    # ]
+
+    risk_ranges = [
+        (0, 35, 0.85),   # risk_score: 0-35 => base_stock_weight: 0.75
+        (35, 40, 0.65),
+        (40, 45, 0.45),
+        (45, 55, 0.35),
+        (55, 65, 0.20),
+        (64, 100, 0.10)
+    ]
+
+    for lower_bound, upper_bound, base_stock_weight in risk_ranges:
+        if lower_bound <= risk_score < upper_bound:
+            # Calculate the position within the current range (0.0 at lower bound to 1.0 at upper bound)
+            range_position = (risk_score - lower_bound) / (upper_bound - lower_bound)
+            # Adjust max_stock_weight based on where the risk_score falls within the range
+            max_stock_weight = base_stock_weight * (1.0 + range_position * (1 - base_stock_weight))
+            break
 
     # Calculate desired stock ratio based on risk acceptance
     desired_stock_ratio = max_stock_weight * risk_acceptance
 
     # Calculate and return the cash ratio
     cash_ratio = 1.0 - desired_stock_ratio
+
     return cash_ratio
 
 def calculate_percent_change_from_cagr(cagr, start_date, end_date):
@@ -271,7 +338,8 @@ def get_returns(stocks, wts, start_date, end_date=TODAY):
 def get_returns_from_data(data, wts, stocks):
     assets = data.filter(stocks)
     initial_alloc = wts/assets.iloc[0]
-    if initial_alloc.isna().any():
+    
+    if initial_alloc.isna().any():        
         raise ValueError("Some stock is not available at initial state!")
     portfolio_value = (assets * initial_alloc).sum(axis=1)
     returns = portfolio_value.pct_change()[1:]
@@ -318,6 +386,8 @@ def graph_assets_price_history(data, save=False):
 
 
 def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=False, save_pdf=False, filename="empyrial_report.pdf"):
+
+    creturns = None
     if isinstance(my_portfolio.rebalance, pd.DataFrame):
         # we want to get the dataframe with the dates and weights
         rebalance_schedule = my_portfolio.rebalance
@@ -342,6 +412,7 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
         dates = datess
         # this will hold returns
         returns = pd.Series()
+        cumulative_returns_list = []  # To store cumulative returns after each rebalancement
 
         # then we want to be able to call the dates like tuples
         for i in range(len(dates) - 1):
@@ -375,8 +446,16 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
             # Concatenate the Series or DataFrames
             # Then, drop duplicate indices, keeping the first occurrence
             combined = pd.concat([returns, add_returns])
-            combined = combined[~combined.index.duplicated(keep='first')]
-            returns = combined
+            combined_keep_first = combined[~combined.index.duplicated(keep='first')]
+            combined_keep_last = combined[~combined.index.duplicated(keep='last')]
+            combined_first_part = combined_keep_first.iloc[:i+1]
+            combined_last_part = combined_keep_last.iloc[i+1:]
+            
+            returns = pd.concat([combined_first_part, combined_last_part])
+
+            # Recalculate cumulative returns after each rebalance
+            creturns = (returns + 1).cumprod()
+            cumulative_returns_list.append(creturns)
     else:
         if not my_portfolio.data.empty:
             returns = get_returns_from_data(my_portfolio.data, my_portfolio.weights, my_portfolio.portfolio)
@@ -387,9 +466,13 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
               start_date=my_portfolio.start_date,
               end_date=my_portfolio.end_date,
             )
+        
+        # Calculate cumulative returns of the portfolio
+        creturns = (returns + 1).cumprod()
 
+    ### Orig. calculation of creturns:
     # Calculate cumulative returns of the portfolio
-    creturns = (returns + 1).cumprod()
+    # creturns = (returns + 1).cumprod()
 
     # Get benchmark prices (assuming benchmark is a single asset)
     benchmark_prices = my_portfolio.data_all[my_portfolio.benchmark[0]]
@@ -459,17 +542,6 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
 
     except Exception as e:
         pass
-
-    print("Start date: " + str(my_portfolio.start_date))
-    print("End date: " + str(my_portfolio.end_date))
-
-    #benchmark = get_returns(
-    #    my_portfolio.benchmark,
-    #    wts=[1],
-    #    start_date=my_portfolio.start_date,
-    #    end_date=my_portfolio.end_date,
-    #)
-    #benchmark = benchmark.dropna()
     
     benchmark = None
     if not my_portfolio.data.empty:
@@ -487,39 +559,13 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
         )
         benchmark = benchmark.dropna()
     
-    # --- CHECK DUP in returns, benchmark
-    # print("--- checking dup. in returns and benchmark")
-    # print(returns.index[returns.index.duplicated()])
-    # in orig. code: returns is a Series; and benchmark is a DataFrame
-    
-    # Set pandas to display all rows and columns
-    # pd.set_option('display.max_rows', None)
-    # pd.set_option('display.max_columns', None)
-    # print(f"--- items in returns and benchmark\n")
-    
-    if isinstance(returns, pd.DataFrame):
-        print("returns is a DataFrame")
-    elif isinstance(returns, pd.Series):
-        print("returns is a Series")
-    print(f"---returns:\n{returns}")
-    
     if isinstance(benchmark, pd.DataFrame):
-        print("benchmark is a DataFrame")
+        # print("benchmark is a DataFrame")
+        pass
     elif isinstance(benchmark, pd.Series):
-        print("benchmark is a Series")
+        # print("benchmark is a Series")
         # Convert Series to DataFrame
         benchmark = benchmark.to_frame()
-        
-        if isinstance(benchmark, pd.DataFrame):
-            print("benchmark is NOW a DataFrame")
-        elif isinstance(benchmark, pd.Series):
-            print("benchmark is STILL a Series")
-    print(f"---benchmark:\n{benchmark}")
-    # Optionally, reset to default settings after printing
-    # pd.reset_option('display.max_rows')
-    # pd.reset_option('display.max_columns')
-    
-    #print(benchmark.index[benchmark.index.duplicated()])
     
     # tz_localize
     # Ensure the index of the benchmark is a DatetimeIndex
@@ -882,11 +928,11 @@ def empyrial(my_portfolio, rf=0.0, sigma_value=1, confidence_value=0.95, report=
     wts = copy.deepcopy(my_portfolio.weights)
     indices = [i for i, x in enumerate(wts) if x == 0.0]
 
-    while 0.0 in wts:
-        wts.remove(0.0)
+    # while 0.0 in wts:
+    #     wts.remove(0.0)
 
-    for i in sorted(indices, reverse=True):
-        del my_portfolio.portfolio[i]
+    # for i in sorted(indices, reverse=True):
+    #     del my_portfolio.portfolio[i]
 
     ### Performance Report ###
     # Portfolio performance metrics
@@ -1142,10 +1188,11 @@ def equal_weighting(my_portfolio) -> list:
 
 def efficient_frontier(my_portfolio, perf=True) -> list:
     if not my_portfolio.data.empty:
-        print("---data NOT EMPTY >> using custom data")
+        # print("---data NOT EMPTY >> using custom data")
         df = my_portfolio.data
+        pass
     else:
-        print("---data is EMPTY >> yfinance?")
+        # print("---data is EMPTY >> yfinance?")
         pass
     
         # ohlc = yf.download(
@@ -1388,11 +1435,11 @@ def optimize_portfolio(my_portfolio, vol_max=25, pie_size=5, font_size=14):
 
     indices = [i for i, x in enumerate(wts) if x == 0.0]
 
-    while 0.0 in wts:
-        wts.remove(0.0)
+    # while 0.0 in wts:
+    #     wts.remove(0.0)
 
-    for i in sorted(indices, reverse=True):
-        del port[i]
+    # for i in sorted(indices, reverse=True):
+    #     del port[i]
 
     graph_opt(port, wts, pie_size, font_size)
 
@@ -1485,13 +1532,50 @@ def get_date_range(start_date, end_date, rebalance) -> list:
     return rebalance_dates
 
 def scale_weights_for_cash(weights, cash_ratio):
-    # Adjust the weights dynamically
-    current_cash_ratio = cash_ratio
-    other_weights_sum = sum(weights[1:])  # Exclude cash weight
 
-    # Scale the other weights to fit within the remaining allocation after cash
-    scaled_weights = [current_cash_ratio] + [(1.0 - current_cash_ratio) * w / other_weights_sum for w in weights[1:]]
+    # Sum the absolute values of all the weights
+    total_weight = sum(abs(weight) for i, weight in enumerate(weights))
+
+    if total_weight == 0:
+        raise ValueError("Total weight cannot be zero.")
+    weights = [w / total_weight for w in weights]
+
+    # other_weights_sum = total_weight - abs(weights[0])
+    # if other_weights_sum == 0:
+    #     raise ValueError("Sum of other weights cannot be zero when scaling.")
+
+    # Scale non-cash weights to fit the remaining allocation after cash
+    scaled_weights = []
+    for i, weight in enumerate(weights):
+        if i == 0:
+            scaled_weights.append(cash_ratio)
+        else:
+            # scaled_weights.append((1.0 - cash_ratio) * weight / other_weights_sum)
+            if weight < 0:
+                scaled_weights.append(0)
+            else:
+                scaled_weights.append(weight)
+
+    # Ensure the scaled weights sum up to 1.0
+    scaled_weights_total = sum(scaled_weights)
+
+    other_weights_sum = scaled_weights_total - abs(scaled_weights[0])
+    if other_weights_sum == 0:
+        raise ValueError("Sum of other weights cannot be zero when scaling.")
+
+    scaled_weights = [(1.0 - cash_ratio) * w / other_weights_sum for w in scaled_weights]
+    scaled_weights[0] = cash_ratio # restore cash weight
+
     return scaled_weights
+
+    # ORIG. CODE of mine
+    # # Adjust the weights dynamically
+    # current_cash_ratio = cash_ratio
+    # other_weights_sum = sum(weights[1:])  # Exclude cash weight
+
+    # # Scale the other weights to fit within the remaining allocation after cash
+    # scaled_weights = [current_cash_ratio] + [(1.0 - current_cash_ratio) * w / other_weights_sum for w in weights[1:]]
+    # return scaled_weights
 
 def make_rebalance(
     start_date,
@@ -1511,6 +1595,7 @@ def make_rebalance(
     cash_ratio_is_dynamic,
     cash_ratio,  # Add cash_ratio parameter
     risk_score_data,
+    risk_acceptance,
     
 ) -> pd.DataFrame:
     sdate = str(start_date)[:10]
@@ -1541,18 +1626,33 @@ def make_rebalance(
     # then make a dataframe with the index being the tickers
     output_df = pd.DataFrame(index=portfolio_input)
 
+    # Initialize previous period dates
+    last_start_date = None
+    last_end_date = None
+
     the_dynamic_cash_ratio = cash_ratio
     for i in range(len(dates) - 1):
-        ### dummy condition: random
-        # the_dynamic_cash_ratio = random.uniform(0.1, 0.6)
+        # Current period dates
+        current_start_date = dates[i]
+        current_end_date = dates[i + 1]
 
         if cash_ratio_is_dynamic and risk_score_data is not None:
             # the_dynamic_cash_ratio = random.uniform(0.1, 0.6)
-            the_dynamic_cash_ratio = calculate_cash_ratio(dates[i+1], 1.0, risk_score_data)
+            # the_dynamic_cash_ratio = calculate_cash_ratio(dates[i+1], 0.9, risk_score_data)
+            the_dynamic_cash_ratio = calculate_cash_ratio(
+                risk_acceptance = risk_acceptance, 
+                risk_score_data = risk_score_data, 
+                start_date = current_start_date, 
+                end_date = current_end_date, 
+                last_start_date = last_start_date, 
+                last_end_date = last_end_date
+            )
         else:
             the_dynamic_cash_ratio = cash_ratio
 
-        print(f"--- CASH RATIO (dynamic={cash_ratio_is_dynamic}): {the_dynamic_cash_ratio}")
+        # Update the last period dates for the next iteration
+        last_start_date = current_start_date
+        last_end_date = current_end_date
         
         try:
             portfolio = Engine(
@@ -1572,6 +1672,7 @@ def make_rebalance(
                 cash_ratio_is_dynamic = cash_ratio_is_dynamic,
                 cash_ratio=the_dynamic_cash_ratio,
                 risk_score_data = risk_score_data,
+                risk_acceptance = risk_acceptance,
             )
 
         except TypeError:
@@ -1592,6 +1693,7 @@ def make_rebalance(
                 cash_ratio_is_dynamic = cash_ratio_is_dynamic,
                 cash_ratio=the_dynamic_cash_ratio,
                 risk_score_data = risk_score_data,
+                risk_acceptance = risk_acceptance,
             )
         
         # Adjust the weights dynamically
@@ -1599,10 +1701,6 @@ def make_rebalance(
 
         # Orig. code
         output_df["{}".format(dates[i + 1])] = portfolio.weights
-        
-        # Debug purpose
-        # print(df)
-        # print(portfolio.weights)
         
         # # Mod: might not work: ddjust weights to match the index of output_df
         # cleaned_weights = pd.Series(portfolio.weights, index=portfolio_input)
@@ -1627,6 +1725,7 @@ def make_rebalance(
             cash_ratio_is_dynamic = cash_ratio_is_dynamic,
             cash_ratio=the_dynamic_cash_ratio,
             risk_score_data = risk_score_data,
+            risk_acceptance = risk_acceptance,
         )
 
     except TypeError:
@@ -1646,6 +1745,7 @@ def make_rebalance(
             cash_ratio_is_dynamic = cash_ratio_is_dynamic,
             cash_ratio=the_dynamic_cash_ratio,
             risk_score_data = risk_score_data,
+            risk_acceptance = risk_acceptance,
         )
     
     # Adjust the weights dynamically
@@ -1654,6 +1754,6 @@ def make_rebalance(
     output_df["{}".format(TODAY)] = portfolio.weights
 
     make_rebalance.output = output_df
-    print("Rebalance schedule: ")
-    print(output_df)
+    # print("!!!FINAL Rebalance schedule: ")
+    # print(output_df)
     return output_df
